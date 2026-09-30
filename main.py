@@ -170,7 +170,7 @@ function startVoice() {
     }
 
     recognition = new SpeechRecognition();
-    recognition.lang = 'en-NG';
+    recognition.lang = 'en-US';
     recognition.interimResults = true;
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
@@ -202,7 +202,7 @@ function startVoice() {
         micButton.textContent = '🎤';
         input.placeholder = 'Talk to Alpha...';
 
-        let message = 'I could not hear you.';
+        let message = 'Voice error: ' + event.error + '. Please try again.';
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
             message = 'Microphone permission was blocked. Allow microphone access for Chrome.';
         } else if (event.error === 'no-speech') {
