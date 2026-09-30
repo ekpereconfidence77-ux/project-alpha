@@ -235,7 +235,19 @@ async function sendMessage(textFromVoice = null) {
             body: JSON.stringify({message: text})
         });
 
-        const data = await response.json();
+        const raw = await response.text();
+        let data;
+
+        try {
+            data = JSON.parse(raw);
+        } catch (parseError) {
+            console.error("Server returned:", raw);
+            throw new Error(
+                "Alpha's server returned a non-JSON error (HTTP " +
+                response.status +
+                "). Please redeploy the latest main.py on Render."
+            );
+        }
 
         if (!response.ok) {
             throw new Error(data.error || "Chat request failed.");
@@ -554,13 +566,23 @@ Be helpful, natural, and concise.
         )
 
         if result.status_code != 200:
+            try:
+                upstream = result.json()
+                detail = upstream.get("error", {}).get("message", result.text)
+            except Exception:
+                detail = result.text[:1000]
+
             return jsonify({
-                "error": f"OpenRouter error: {result.text}"
+                "error": f"OpenRouter error (HTTP {result.status_code}): {detail}"
             }), 502
 
-        result_data = result.json()
-
-        reply = result_data["choices"][0]["message"]["content"]
+        try:
+            result_data = result.json()
+            reply = result_data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return jsonify({
+                "error": f"OpenRouter returned an unexpected response: {str(e)}"
+            }), 502
 
         return jsonify({"reply": reply})
 
