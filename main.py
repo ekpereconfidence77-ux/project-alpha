@@ -8,6 +8,7 @@ app = Flask(__name__)
 
 DB_FILE = "alpha_memory.db"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 
 def init_db():
@@ -45,308 +46,340 @@ def save_memory(user_id, memory):
 
 init_db()
 
-
 HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Project Alpha</title>
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #0f1115;
-            color: white;
-        }
-        .app {
-            max-width: 700px;
-            margin: 0 auto;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        header {
-            padding: 18px;
-            text-align: center;
-            font-size: 24px;
-            font-weight: bold;
-            border-bottom: 1px solid #292d36;
-        }
-        #chat {
-            flex: 1;
-            padding: 16px;
-            overflow-y: auto;
-        }
-        .message {
-            padding: 12px 14px;
-            margin: 10px 0;
-            border-radius: 14px;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .user {
-            background: #2b6cff;
-            margin-left: 20%;
-        }
-        .alpha {
-            background: #20242c;
-            margin-right: 10%;
-        }
-        .composer {
-            display: flex;
-            gap: 8px;
-            padding: 12px;
-            border-top: 1px solid #292d36;
-            background: #15181e;
-            position: sticky;
-            bottom: 0;
-        }
-        input {
-            flex: 1;
-            min-width: 0;
-            padding: 14px;
-            border: 1px solid #3a404c;
-            border-radius: 12px;
-            background: #0f1115;
-            color: white;
-            font-size: 16px;
-            outline: none;
-        }
-        button {
-            border: 0;
-            border-radius: 12px;
-            padding: 0 15px;
-            font-size: 18px;
-            cursor: pointer;
-        }
-        #micButton { background: #303641; color: white; }
-        #sendButton { background: #2b6cff; color: white; }
-        #micButton.listening { background: #d22; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project Alpha</title>
+<style>
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        background: #11151b;
+        color: #ffffff;
+        font-family: Arial, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    header {
+        padding: 16px 18px;
+        background: #181d25;
+        border-bottom: 1px solid #2a303a;
+        font-size: 20px;
+        font-weight: 700;
+    }
+
+    #chat {
+        flex: 1;
+        overflow-y: auto;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .message {
+        max-width: 85%;
+        padding: 12px 14px;
+        border-radius: 16px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+
+    .user {
+        align-self: flex-end;
+        background: #2b6cff;
+    }
+
+    .alpha {
+        align-self: flex-start;
+        background: #242a33;
+    }
+
+    .status {
+        text-align: center;
+        color: #aab2bf;
+        font-size: 13px;
+        min-height: 18px;
+        padding: 0 12px 6px;
+    }
+
+    .composer {
+        display: flex;
+        gap: 8px;
+        padding: 10px;
+        background: #181d25;
+        border-top: 1px solid #2a303a;
+    }
+
+    input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid #343b46;
+        background: #222832;
+        color: white;
+        border-radius: 12px;
+        padding: 13px 14px;
+        outline: none;
+        font-size: 16px;
+    }
+
+    button {
+        border: none;
+        border-radius: 12px;
+        color: white;
+        font-size: 18px;
+        min-width: 48px;
+        padding: 0 14px;
+        cursor: pointer;
+    }
+
+    #micButton {
+        background: #303641;
+    }
+
+    #micButton.recording {
+        background: #d22;
+        animation: pulse 1s infinite;
+    }
+
+    #sendButton {
+        background: #2b6cff;
+    }
+
+    button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.06); }
+        100% { transform: scale(1); }
+    }
+</style>
 </head>
+
 <body>
-<div class="app">
-    <header>🤖 Project Alpha</header>
+<header>🤖 Project Alpha</header>
 
-    <div id="chat">
-        <div class="message alpha">Hello 👋 I'm Alpha. How can I help you?</div>
-    </div>
+<div id="chat">
+    <div class="message alpha">Hello 👋 I'm Alpha. Type a message or tap 🎤 and talk to me.</div>
+</div>
 
-    <div class="composer">
-        <button id="micButton" onclick="startVoice()">🎤</button>
-        <input id="message" placeholder="Talk to Alpha..." autocomplete="off">
-        <button id="sendButton" onclick="sendMessage()">➤</button>
-    </div>
+<div id="status" class="status"></div>
+
+<div class="composer">
+    <button id="micButton" onclick="toggleRecording()">🎤</button>
+    <input id="message" placeholder="Talk to Alpha..." autocomplete="off">
+    <button id="sendButton" onclick="sendMessage()">➤</button>
 </div>
 
 <script>
-let recognition = null;
-let voiceRetry = 0;
-let voiceWasStarted = false;
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let recordingMimeType = "";
+
+const chat = document.getElementById("chat");
+const messageInput = document.getElementById("message");
+const micButton = document.getElementById("micButton");
+const sendButton = document.getElementById("sendButton");
+const statusBox = document.getElementById("status");
+
+function addMessage(text, who) {
+    const div = document.createElement("div");
+    div.className = "message " + who;
+    div.textContent = text;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+}
+
+function setStatus(text) {
+    statusBox.textContent = text || "";
+}
 
 function speak(text) {
     if (!("speechSynthesis" in window)) return;
+
     window.speechSynthesis.cancel();
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = "en-US";
-    utterance.rate = 1;
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+
     window.speechSynthesis.speak(utterance);
 }
 
-function startVoice() {
-    const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
+async function sendMessage(textFromVoice = null) {
+    const text = (textFromVoice !== null ? textFromVoice : messageInput.value).trim();
 
-    const micButton = document.getElementById("micButton");
-    const input = document.getElementById("message");
+    if (!text) return;
 
-    if (!SpeechRecognition) {
-        alert("Voice input is not supported here. Please use Google Chrome.");
-        return;
-    }
-
-    if (recognition) {
-        voiceWasStarted = false;
-        recognition.abort();
-        recognition = null;
-        micButton.classList.remove("listening");
-        micButton.textContent = "🎤";
-        input.placeholder = "Talk to Alpha...";
-        return;
-    }
-
-    voiceRetry = 0;
-    startRecognition(SpeechRecognition, micButton, input);
-}
-
-function startRecognition(SpeechRecognition, micButton, input) {
-    recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.interimResults = true;
-    recognition.continuous = false;
-    recognition.maxAlternatives = 1;
-    voiceWasStarted = true;
-
-    recognition.onstart = function() {
-        voiceRetry = 0;
-        micButton.classList.add("listening");
-        micButton.textContent = "🔴";
-        input.placeholder = "Listening... speak now";
-    };
-
-    recognition.onaudiostart = function() {
-        input.placeholder = "Listening... I can hear the microphone";
-    };
-
-    recognition.onspeechstart = function() {
-        input.placeholder = "Hearing you...";
-    };
-
-    recognition.onresult = function(event) {
-        let transcript = "";
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-            transcript += event.results[i][0].transcript;
-        }
-
-        transcript = transcript.trim();
-
-        if (transcript) {
-            input.value = transcript;
-        }
-
-        const lastResult = event.results[event.results.length - 1];
-
-        if (lastResult && lastResult.isFinal && transcript) {
-            voiceWasStarted = false;
-            setTimeout(function() {
-                sendMessage();
-            }, 300);
-        }
-    };
-
-    recognition.onerror = function(event) {
-        console.log("Speech recognition error:", event.error);
-
-        if (event.error === "aborted" && voiceRetry < 2 && voiceWasStarted) {
-            voiceRetry++;
-
-            setTimeout(function() {
-                if (voiceWasStarted) {
-                    startRecognition(SpeechRecognition, micButton, input);
-                }
-            }, 500);
-
-            return;
-        }
-
-        voiceWasStarted = false;
-        micButton.classList.remove("listening");
-        micButton.textContent = "🎤";
-        input.placeholder = "Talk to Alpha...";
-
-        let message = "Voice error: " + event.error + ". Please try again.";
-
-        if (event.error === "no-speech") {
-            message = "No speech detected. Tap 🎤 and speak clearly.";
-        } else if (event.error === "not-allowed" ||
-                   event.error === "service-not-allowed") {
-            message = "Chrome does not have microphone permission. Allow microphone access for this site.";
-        } else if (event.error === "audio-capture") {
-            message = "Chrome cannot access the microphone. Check your phone microphone.";
-        } else if (event.error === "network") {
-            message = "Speech recognition needs an internet connection.";
-        }
-
-        alert(message);
-        recognition = null;
-    };
-
-    recognition.onend = function() {
-        if (voiceWasStarted && voiceRetry > 0 && voiceRetry <= 2) {
-            return;
-        }
-
-        if (voiceWasStarted && !input.value.trim()) {
-            voiceWasStarted = false;
-            micButton.classList.remove("listening");
-            micButton.textContent = "🎤";
-            input.placeholder = "Talk to Alpha...";
-            recognition = null;
-            return;
-        }
-
-        if (!voiceWasStarted) {
-            micButton.classList.remove("listening");
-            micButton.textContent = "🎤";
-            input.placeholder = "Talk to Alpha...";
-            recognition = null;
-        }
-    };
-
-    try {
-        recognition.start();
-    } catch (error) {
-        console.log("Could not start speech recognition:", error);
-        voiceWasStarted = false;
-        micButton.classList.remove("listening");
-        micButton.textContent = "🎤";
-        input.placeholder = "Talk to Alpha...";
-        recognition = null;
-        alert("Could not start voice input. Please tap 🎤 and try again.");
-    }
-}
-
-async function sendMessage() {
-    const input = document.getElementById("message");
-    const chat = document.getElementById("chat");
-    const message = input.value.trim();
-
-    if (!message) return;
-
-    chat.innerHTML += '<div class="message user">' + escapeHtml(message) + '</div>';
-    input.value = "";
-
-    const thinking = document.createElement("div");
-    thinking.className = "message alpha";
-    thinking.textContent = "Thinking...";
-    chat.appendChild(thinking);
-
-    window.scrollTo(0, document.body.scrollHeight);
+    addMessage(text, "user");
+    messageInput.value = "";
+    setStatus("Alpha is thinking...");
+    sendButton.disabled = true;
 
     try {
         const response = await fetch("/chat", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ message: message })
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({message: text})
         });
 
         const data = await response.json();
 
-        if (data.reply) {
-            thinking.textContent = data.reply;
-            speak(data.reply);
-        } else {
-            thinking.textContent = data.error || "Something went wrong.";
+        if (!response.ok) {
+            throw new Error(data.error || "Chat request failed.");
         }
+
+        addMessage(data.reply, "alpha");
+        speak(data.reply);
+        setStatus("");
     } catch (error) {
-        thinking.textContent = "Connection error. Please try again.";
-        console.error(error);
+        addMessage("Sorry, something went wrong: " + error.message, "alpha");
+        setStatus("");
+    } finally {
+        sendButton.disabled = false;
+        messageInput.focus();
     }
 }
 
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+async function toggleRecording() {
+    if (isRecording) {
+        stopRecording();
+    } else {
+        await startRecording();
+    }
 }
 
-document.getElementById("message").addEventListener("keydown", function(event) {
+async function startRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Your browser does not support microphone recording.");
+        return;
+    }
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+
+        let options = {};
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+            options.mimeType = "audio/webm;codecs=opus";
+        } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+            options.mimeType = "audio/webm";
+        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+            options.mimeType = "audio/mp4";
+        }
+
+        mediaRecorder = new MediaRecorder(stream, options);
+        recordingMimeType = mediaRecorder.mimeType || "audio/webm";
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = function(event) {
+            if (event.data && event.data.size > 0) {
+                audioChunks.push(event.data);
+            }
+        };
+
+        mediaRecorder.onerror = function() {
+            setStatus("Microphone recording failed.");
+        };
+
+        mediaRecorder.onstop = async function() {
+            stream.getTracks().forEach(track => track.stop());
+
+            const blob = new Blob(audioChunks, {type: recordingMimeType});
+            audioChunks = [];
+
+            if (blob.size === 0) {
+                setStatus("");
+                alert("No audio was recorded. Please try again.");
+                return;
+            }
+
+            await transcribeAudio(blob);
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        micButton.classList.add("recording");
+        micButton.textContent = "⏹️";
+        setStatus("🔴 Recording... tap the button again when you're done speaking.");
+    } catch (error) {
+        if (error.name === "NotAllowedError") {
+            alert("Microphone permission was denied. Allow microphone access for Alpha in Chrome settings.");
+        } else if (error.name === "NotFoundError") {
+            alert("No microphone was found on this device.");
+        } else {
+            alert("Could not start the microphone: " + error.message);
+        }
+    }
+}
+
+function stopRecording() {
+    if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+
+    isRecording = false;
+    micButton.classList.remove("recording");
+    micButton.textContent = "🎤";
+    setStatus("⏳ Preparing your voice message...");
+    mediaRecorder.stop();
+}
+
+async function transcribeAudio(blob) {
+    setStatus("🧠 Converting your voice to text...");
+    micButton.disabled = true;
+
+    try {
+        const formData = new FormData();
+
+        let filename = "voice.webm";
+        if (blob.type.includes("mp4")) {
+            filename = "voice.mp4";
+        }
+
+        formData.append("audio", blob, filename);
+
+        const response = await fetch("/transcribe", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Transcription failed.");
+        }
+
+        const transcript = (data.text || "").trim();
+
+        if (!transcript) {
+            throw new Error("I could not detect any words. Please speak a little louder and try again.");
+        }
+
+        messageInput.value = transcript;
+        setStatus("✅ I heard: " + transcript);
+
+        await sendMessage(transcript);
+    } catch (error) {
+        setStatus("");
+        alert("Voice error: " + error.message);
+    } finally {
+        micButton.disabled = false;
+    }
+}
+
+messageInput.addEventListener("keydown", function(event) {
     if (event.key === "Enter") {
+        event.preventDefault();
         sendMessage();
     }
 });
@@ -374,20 +407,92 @@ def home():
     return response
 
 
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    groq_key = os.environ.get("GROQ_API_KEY")
+
+    if not groq_key:
+        return jsonify({
+            "error": "GROQ_API_KEY is not set in Render Environment Variables."
+        }), 500
+
+    audio = request.files.get("audio")
+
+    if not audio:
+        return jsonify({"error": "No audio file was received."}), 400
+
+    try:
+        audio_bytes = audio.read()
+
+        if not audio_bytes:
+            return jsonify({"error": "The recorded audio was empty."}), 400
+
+        filename = audio.filename or "voice.webm"
+        content_type = audio.mimetype or "audio/webm"
+
+        files = {
+            "file": (filename, audio_bytes, content_type)
+        }
+
+        data = {
+            "model": "whisper-large-v3-turbo",
+            "response_format": "json"
+        }
+
+        result = requests.post(
+            GROQ_TRANSCRIBE_URL,
+            headers={
+                "Authorization": f"Bearer {groq_key}"
+            },
+            files=files,
+            data=data,
+            timeout=60
+        )
+
+        if result.status_code != 200:
+            try:
+                error_data = result.json()
+                error_message = error_data.get("error", {}).get("message", result.text)
+            except Exception:
+                error_message = result.text
+
+            return jsonify({
+                "error": f"Groq transcription error: {error_message}"
+            }), 502
+
+        result_data = result.json()
+        text = result_data.get("text", "").strip()
+
+        return jsonify({"text": text})
+
+    except requests.Timeout:
+        return jsonify({
+            "error": "Voice transcription timed out. Please try again."
+        }), 504
+
+    except Exception as e:
+        return jsonify({
+            "error": f"Voice transcription failed: {str(e)}"
+        }), 500
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 
-    if not api_key:
-        return jsonify({"error": "OPENROUTER_API_KEY is not configured on the server."}), 500
+    if not openrouter_key:
+        return jsonify({
+            "error": "OPENROUTER_API_KEY is not set."
+        }), 500
 
     data = request.get_json(silent=True) or {}
     message = str(data.get("message", "")).strip()
 
     if not message:
-        return jsonify({"error": "Please enter a message."}), 400
+        return jsonify({"error": "Message is empty."}), 400
 
     user_id = request.cookies.get("alpha_user_id")
+
     if not user_id:
         user_id = str(uuid.uuid4())
 
@@ -395,12 +500,15 @@ def chat():
 
     if lower_message.startswith("remember that "):
         memory = message[len("remember that "):].strip()
+
         if memory:
             save_memory(user_id, memory)
-            return jsonify({"reply": "Got it. I'll remember that for this browser."})
+
+        return jsonify({
+            "reply": "Got it. I'll remember that for this browser."
+        })
 
     memories = get_memories(user_id)
-    memory_text = "\n".join("- " + item for item in memories)
 
     system_prompt = """You are Alpha, a friendly personal AI assistant.
 You are used by multiple people.
@@ -409,41 +517,51 @@ Never reveal one person's memories to another person.
 Be helpful, natural, and concise.
 """
 
-    if memory_text:
-        system_prompt += "\nMemories for this user:\n" + memory_text
+    if memories:
+        system_prompt += "\nPrivate memories for this user:\n"
+        for memory in memories:
+            system_prompt += f"- {memory}\n"
 
     payload = {
         "model": "openrouter/free",
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message}
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": message
+            }
         ]
     }
 
     try:
-        response = requests.post(
+        result = requests.post(
             OPENROUTER_URL,
             headers={
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {openrouter_key}",
                 "Content-Type": "application/json"
             },
             json=payload,
             timeout=60
         )
 
-        if response.status_code != 200:
+        if result.status_code != 200:
             return jsonify({
-                "error": f"AI service error ({response.status_code})."
+                "error": f"OpenRouter error: {result.text}"
             }), 502
 
-        result = response.json()
-        reply = result["choices"][0]["message"]["content"]
+        result_data = result.json()
+
+        reply = result_data["choices"][0]["message"]["content"]
 
         return jsonify({"reply": reply})
 
-    except Exception as error:
-        print("Chat error:", error)
-        return jsonify({"error": "Alpha could not connect to the AI service."}), 502
+    except Exception as e:
+        return jsonify({
+            "error": f"AI request failed: {str(e)}"
+        }), 500
 
 
 if __name__ == "__main__":
