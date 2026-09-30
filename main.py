@@ -1,11 +1,48 @@
-
 import os
+import sqlite3
+import uuid
 import requests
-from flask import Flask, request, jsonify, render_template_string
+
+from flask import Flask, request, jsonify, render_template_string, make_response
 
 app = Flask(__name__)
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+DATABASE = "alpha_memory.db"
+
+
+def init_db():
+    conn = sqlite3.connect(DATABASE)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            memory TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_memories(user_id):
+    conn = sqlite3.connect(DATABASE)
+    rows = conn.execute(
+        "SELECT memory FROM memories WHERE user_id = ? ORDER BY id DESC LIMIT 20",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+
+def save_memory(user_id, memory):
+    conn = sqlite3.connect(DATABASE)
+    conn.execute(
+        "INSERT INTO memories (user_id, memory) VALUES (?, ?)",
+        (user_id, memory)
+    )
+    conn.commit()
+    conn.close()
+
 
 HTML = """
 <!DOCTYPE html>
@@ -13,6 +50,7 @@ HTML = """
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Alpha AI</title>
+
     <style>
         body {
             margin: 0;
@@ -43,6 +81,7 @@ HTML = """
             max-width: 800px;
             margin: auto;
             min-height: 65vh;
+            padding-bottom: 90px;
         }
 
         .message {
@@ -140,7 +179,10 @@ async function sendMessage() {
         });
 
         const data = await response.json();
-        thinking.textContent = data.reply || data.error || "Something went wrong.";
+
+        thinking.textContent =
+            data.reply || data.error || "Something went wrong.";
+
     } catch (error) {
         thinking.textContent = "I couldn't connect to Alpha.";
     }
@@ -148,61 +190,114 @@ async function sendMessage() {
     window.scrollTo(0, document.body.scrollHeight);
 }
 
+
 function escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
 }
 
-document.getElementById("message").addEventListener("keydown", function(event) {
-    if (event.key === "Enter") {
-        sendMessage();
+
+document.getElementById("message").addEventListener(
+    "keydown",
+    function(event) {
+        if (event.key === "Enter") {
+            sendMessage();
+        }
     }
-});
+);
 </script>
 
 </body>
 </html>
 """
 
+
 @app.route("/")
 def home():
-    return render_template_string(HTML)
+
+    user_id = request.cookies.get("alpha_user_id")
+
+    if not user_id:
+        user_id = str(uuid.uuid4())
+
+    response = make_response(render_template_string(HTML))
+
+    response.set_cookie(
+        "alpha_user_id",
+        user_id,
+        max_age=60 * 60 * 24 * 365,
+        httponly=True,
+        samesite="Lax"
+    )
+
+    return response
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
+
+    if not OPENROUTER_API_KEY:
+        return jsonify({
+            "error": "Alpha is not configured correctly."
+        }), 500
+
+    user_id = request.cookies.get("alpha_user_id")
+
+    if not user_id:
+        user_id = str(uuid.uuid4())
+
     data = request.get_json()
     message = data.get("message", "").strip()
 
     if not message:
-        return jsonify({"error": "Please enter a message."})
-
-    if not OPENROUTER_API_KEY:
         return jsonify({
-            "error": "OPENROUTER_API_KEY has not been configured."
-        }), 500
+            "error": "Please enter a message."
+        })
+
+    memories = get_memories(user_id)
+
+    memory_text = ""
+
+    if memories:
+        memory_text = (
+            "\n\nThings this user previously asked Alpha to remember:\n"
+            + "\n".join("- " + m for m in memories)
+        )
+
+    system_prompt = """
+You are Alpha, a friendly personal AI assistant.
+
+You are being used by multiple people.
+
+Each person has their own private conversation memory.
+Never reveal another user's information or memory.
+
+If a user explicitly tells you to remember something about them,
+you may store it.
+
+Be helpful, friendly, clear and honest.
+""" + memory_text
 
     try:
+
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
+
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://project-alpha.app",
+                "HTTP-Referer": "https://project-alpha.onrender.com",
                 "X-Title": "Project Alpha"
             },
+
             json={
                 "model": "openrouter/free",
+
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "You are Alpha, the user's personal AI assistant. "
-                            "Be helpful, friendly, clear, and honest. "
-                            "Help the user with questions, learning, coding, "
-                            "ideas, writing, and everyday tasks."
-                        )
+                        "content": system_prompt
                     },
                     {
                         "role": "user",
@@ -210,27 +305,56 @@ def chat():
                     }
                 ]
             },
+
             timeout=60
         )
 
         result = response.json()
 
         if response.status_code != 200:
-            return jsonify({
-                "error": result.get("error", {}).get(
+
+            error_message = (
+                result.get("error", {}).get(
                     "message",
                     "The AI service returned an error."
                 )
+            )
+
+            return jsonify({
+                "error": error_message
             }), response.status_code
 
         reply = result["choices"][0]["message"]["content"]
 
-        return jsonify({"reply": reply})
+        # Save simple explicit memory requests.
+        lower_message = message.lower()
+
+        if lower_message.startswith("remember that "):
+
+            memory = message[13:].strip()
+
+            if memory:
+                save_memory(user_id, memory)
+
+        return jsonify({
+            "reply": reply
+        })
 
     except Exception as error:
-        return jsonify({"error": str(error)}), 500
+
+        return jsonify({
+            "error": str(error)
+        }), 500
+
+
+init_db()
 
 
 if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
