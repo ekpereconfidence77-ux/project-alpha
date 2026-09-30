@@ -126,10 +126,19 @@ HTML = """
         button {
             border: none;
             border-radius: 12px;
-            padding: 0 20px;
+            padding: 0 18px;
             background: #315efb;
             color: white;
             font-size: 16px;
+        }
+
+        #micButton {
+            background: #e53935;
+            min-width: 52px;
+        }
+
+        #micButton.listening {
+            background: #35d07f;
         }
     </style>
 </head>
@@ -148,213 +157,129 @@ HTML = """
 </div>
 
 <div class="input-area">
-    <input id="message" placeholder="Message Alpha..." autocomplete="off">
+    <button id="micButton" onclick="startVoice()">🎤</button>
+
+    <input
+        id="message"
+        placeholder="Message Alpha..."
+        autocomplete="off"
+    >
+
     <button onclick="sendMessage()">Send</button>
 </div>
 
+
 <script>
+
+let recognition = null;
+
+function startVoice() {
+
+    const SpeechRecognition =
+        window.SpeechRecognition ||
+        window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+        alert(
+            "Voice input is not supported by this browser. " +
+            "Try opening Alpha in Google Chrome."
+        );
+        return;
+    }
+
+    if (recognition) {
+        recognition.stop();
+        recognition = null;
+        return;
+    }
+
+    recognition = new SpeechRecognition();
+
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+
+    const micButton = document.getElementById("micButton");
+
+    recognition.onstart = function() {
+        micButton.classList.add("listening");
+        micButton.textContent = "🔴";
+    };
+
+    recognition.onresult = function(event) {
+
+        const text =
+            event.results[0][0].transcript;
+
+        document.getElementById("message").value = text;
+
+        sendMessage();
+    };
+
+    recognition.onerror = function(event) {
+
+        console.log("Voice error:", event.error);
+
+        micButton.classList.remove("listening");
+        micButton.textContent = "🎤";
+
+        recognition = null;
+    };
+
+    recognition.onend = function() {
+
+        micButton.classList.remove("listening");
+        micButton.textContent = "🎤";
+
+        recognition = null;
+    };
+
+    recognition.start();
+}
+
+
 async function sendMessage() {
-    const input = document.getElementById("message");
-    const chat = document.getElementById("chat");
-    const message = input.value.trim();
+
+    const input =
+        document.getElementById("message");
+
+    const chat =
+        document.getElementById("chat");
+
+    const message =
+        input.value.trim();
 
     if (!message) return;
 
     chat.innerHTML += `
-        <div class="message user">${escapeHtml(message)}</div>
+        <div class="message user">
+            ${escapeHtml(message)}
+        </div>
     `;
 
     input.value = "";
 
-    const thinking = document.createElement("div");
+    const thinking =
+        document.createElement("div");
+
     thinking.className = "message alpha";
     thinking.textContent = "Thinking...";
+
     chat.appendChild(thinking);
 
+    window.scrollTo(
+        0,
+        document.body.scrollHeight
+    );
+
     try {
+
         const response = await fetch("/chat", {
+
             method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({message: message})
-        });
 
-        const data = await response.json();
-
-        thinking.textContent =
-            data.reply || data.error || "Something went wrong.";
-
-    } catch (error) {
-        thinking.textContent = "I couldn't connect to Alpha.";
-    }
-
-    window.scrollTo(0, document.body.scrollHeight);
-}
-
-
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-
-document.getElementById("message").addEventListener(
-    "keydown",
-    function(event) {
-        if (event.key === "Enter") {
-            sendMessage();
-        }
-    }
-);
-</script>
-
-</body>
-</html>
-"""
-
-
-@app.route("/")
-def home():
-
-    user_id = request.cookies.get("alpha_user_id")
-
-    if not user_id:
-        user_id = str(uuid.uuid4())
-
-    response = make_response(render_template_string(HTML))
-
-    response.set_cookie(
-        "alpha_user_id",
-        user_id,
-        max_age=60 * 60 * 24 * 365,
-        httponly=True,
-        samesite="Lax"
-    )
-
-    return response
-
-
-@app.route("/chat", methods=["POST"])
-def chat():
-
-    if not OPENROUTER_API_KEY:
-        return jsonify({
-            "error": "Alpha is not configured correctly."
-        }), 500
-
-    user_id = request.cookies.get("alpha_user_id")
-
-    if not user_id:
-        user_id = str(uuid.uuid4())
-
-    data = request.get_json()
-    message = data.get("message", "").strip()
-
-    if not message:
-        return jsonify({
-            "error": "Please enter a message."
-        })
-
-    memories = get_memories(user_id)
-
-    memory_text = ""
-
-    if memories:
-        memory_text = (
-            "\n\nThings this user previously asked Alpha to remember:\n"
-            + "\n".join("- " + m for m in memories)
-        )
-
-    system_prompt = """
-You are Alpha, a friendly personal AI assistant.
-
-You are being used by multiple people.
-
-Each person has their own private conversation memory.
-Never reveal another user's information or memory.
-
-If a user explicitly tells you to remember something about them,
-you may store it.
-
-Be helpful, friendly, clear and honest.
-""" + memory_text
-
-    try:
-
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://project-alpha.onrender.com",
-                "X-Title": "Project Alpha"
+            headers: {
+                "Content-Type": "application/json"
             },
 
-            json={
-                "model": "openrouter/free",
-
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": message
-                    }
-                ]
-            },
-
-            timeout=60
-        )
-
-        result = response.json()
-
-        if response.status_code != 200:
-
-            error_message = (
-                result.get("error", {}).get(
-                    "message",
-                    "The AI service returned an error."
-                )
-            )
-
-            return jsonify({
-                "error": error_message
-            }), response.status_code
-
-        reply = result["choices"][0]["message"]["content"]
-
-        # Save simple explicit memory requests.
-        lower_message = message.lower()
-
-        if lower_message.startswith("remember that "):
-
-            memory = message[13:].strip()
-
-            if memory:
-                save_memory(user_id, memory)
-
-        return jsonify({
-            "reply": reply
-        })
-
-    except Exception as error:
-
-        return jsonify({
-            "error": str(error)
-        }), 500
-
-
-init_db()
-
-
-if __name__ == "__main__":
-
-    port = int(os.environ.get("PORT", 5000))
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+           
