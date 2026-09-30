@@ -535,13 +535,7 @@ Be helpful, natural, and concise.
             system_prompt += f"- {memory}\n"
 
     payload = {
-        "model": "openrouter/free",
-        "plugins": [
-            {
-                "id": "web",
-                "max_results": 5
-            }
-        ],
+        "model": "openrouter/free:online",
         "messages": [
             {
                 "role": "system",
@@ -568,7 +562,8 @@ Be helpful, natural, and concise.
         if result.status_code != 200:
             try:
                 upstream = result.json()
-                detail = upstream.get("error", {}).get("message", result.text)
+                error_obj = upstream.get("error", {})
+                detail = error_obj.get("message", result.text)
             except Exception:
                 detail = result.text[:1000]
 
@@ -578,13 +573,35 @@ Be helpful, natural, and concise.
 
         try:
             result_data = result.json()
-            reply = result_data["choices"][0]["message"]["content"]
+            choices = result_data.get("choices", [])
+            if not choices:
+                return jsonify({
+                    "error": "OpenRouter returned no choices."
+                }), 502
+
+            reply = choices[0].get("message", {}).get("content")
+
+            if not reply:
+                return jsonify({
+                    "error": "OpenRouter returned an empty reply."
+                }), 502
+
         except Exception as e:
             return jsonify({
                 "error": f"OpenRouter returned an unexpected response: {str(e)}"
             }), 502
 
         return jsonify({"reply": reply})
+
+    except requests.Timeout:
+        return jsonify({
+            "error": "The AI request timed out. Please try again."
+        }), 504
+
+    except requests.RequestException as e:
+        return jsonify({
+            "error": f"Could not reach OpenRouter: {str(e)}"
+        }), 502
 
     except Exception as e:
         return jsonify({
