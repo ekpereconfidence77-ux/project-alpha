@@ -145,20 +145,21 @@ HTML = """
 let recognition = null;
 
 function speak(text) {
-    if (!("speechSynthesis" in window)) return;
+    if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-US";
+    utterance.lang = 'en-US';
     utterance.rate = 1;
     window.speechSynthesis.speak(utterance);
 }
 
 function startVoice() {
-    const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const micButton = document.getElementById('micButton');
+    const input = document.getElementById('message');
 
     if (!SpeechRecognition) {
-        alert("Voice input is not supported by this browser. Try Google Chrome.");
+        alert('Speech recognition is not supported by this browser. Please use the latest Google Chrome.');
         return;
     }
 
@@ -169,89 +170,111 @@ function startVoice() {
     }
 
     recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.interimResults = false;
+    recognition.lang = 'en-NG';
+    recognition.interimResults = true;
     recognition.continuous = false;
-
-    const micButton = document.getElementById("micButton");
+    recognition.maxAlternatives = 1;
 
     recognition.onstart = function() {
-        micButton.classList.add("listening");
-        micButton.textContent = "🔴";
+        micButton.classList.add('listening');
+        micButton.textContent = '🔴';
+        input.placeholder = 'Listening... speak now';
+        input.value = '';
     };
 
     recognition.onresult = function(event) {
-        const text = event.results[0][0].transcript;
-        document.getElementById("message").value = text;
-        sendMessage();
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+        }
+        transcript = transcript.trim();
+        if (transcript) input.value = transcript;
+
+        const lastResult = event.results[event.results.length - 1];
+        if (lastResult && lastResult.isFinal && transcript) {
+            setTimeout(function() { sendMessage(); }, 300);
+        }
     };
 
     recognition.onerror = function(event) {
-        console.log("Voice error:", event.error);
-        micButton.classList.remove("listening");
-        micButton.textContent = "🎤";
+        console.log('Speech recognition error:', event.error);
+        micButton.classList.remove('listening');
+        micButton.textContent = '🎤';
+        input.placeholder = 'Talk to Alpha...';
+
+        let message = 'I could not hear you.';
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            message = 'Microphone permission was blocked. Allow microphone access for Chrome.';
+        } else if (event.error === 'no-speech') {
+            message = 'I did not detect speech. Tap 🎤 and speak clearly.';
+        } else if (event.error === 'audio-capture') {
+            message = 'I cannot access the microphone. Check that another app is not using it.';
+        } else if (event.error === 'network') {
+            message = 'Speech recognition needs an internet connection. Check your internet.';
+        }
+        alert(message);
         recognition = null;
     };
 
     recognition.onend = function() {
-        micButton.classList.remove("listening");
-        micButton.textContent = "🎤";
+        micButton.classList.remove('listening');
+        micButton.textContent = '🎤';
+        input.placeholder = 'Talk to Alpha...';
         recognition = null;
     };
 
-    recognition.start();
+    try {
+        recognition.start();
+    } catch (error) {
+        console.log('Could not start speech recognition:', error);
+        micButton.classList.remove('listening');
+        micButton.textContent = '🎤';
+        input.placeholder = 'Talk to Alpha...';
+        recognition = null;
+    }
 }
 
 async function sendMessage() {
-    const input = document.getElementById("message");
-    const chat = document.getElementById("chat");
+    const input = document.getElementById('message');
+    const chat = document.getElementById('chat');
     const message = input.value.trim();
-
     if (!message) return;
 
     chat.innerHTML += '<div class="message user">' + escapeHtml(message) + '</div>';
-    input.value = "";
+    input.value = '';
 
-    const thinking = document.createElement("div");
-    thinking.className = "message alpha";
-    thinking.textContent = "Thinking...";
+    const thinking = document.createElement('div');
+    thinking.className = 'message alpha';
+    thinking.textContent = 'Thinking...';
     chat.appendChild(thinking);
 
-    window.scrollTo(0, document.body.scrollHeight);
-
     try {
-        const response = await fetch("/chat", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ message: message })
+        const response = await fetch('/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: message})
         });
-
         const data = await response.json();
-
         if (data.reply) {
             thinking.textContent = data.reply;
             speak(data.reply);
         } else {
-            thinking.textContent = data.error || "Something went wrong.";
+            thinking.textContent = data.error || 'Something went wrong.';
         }
     } catch (error) {
-        thinking.textContent = "Connection error. Please try again.";
+        thinking.textContent = 'Connection error. Please try again.';
         console.error(error);
     }
 }
 
 function escapeHtml(text) {
-    const div = document.createElement("div");
+    const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-document.getElementById("message").addEventListener("keydown", function(event) {
-    if (event.key === "Enter") {
-        sendMessage();
-    }
+document.getElementById('message').addEventListener('keydown', function(event) {
+    if (event.key === 'Enter') sendMessage();
 });
 </script>
 </body>
