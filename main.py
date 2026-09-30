@@ -143,138 +143,212 @@ HTML = """
 
 <script>
 let recognition = null;
+let voiceRetry = 0;
+let voiceWasStarted = false;
 
 function speak(text) {
-    if (!('speechSynthesis' in window)) return;
+    if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
+    utterance.lang = "en-US";
     utterance.rate = 1;
     window.speechSynthesis.speak(utterance);
 }
 
 function startVoice() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const micButton = document.getElementById('micButton');
-    const input = document.getElementById('message');
+    const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    const micButton = document.getElementById("micButton");
+    const input = document.getElementById("message");
 
     if (!SpeechRecognition) {
-        alert('Speech recognition is not supported by this browser. Please use the latest Google Chrome.');
+        alert("Voice input is not supported here. Please use Google Chrome.");
         return;
     }
 
     if (recognition) {
-        recognition.stop();
+        voiceWasStarted = false;
+        recognition.abort();
         recognition = null;
+        micButton.classList.remove("listening");
+        micButton.textContent = "🎤";
+        input.placeholder = "Talk to Alpha...";
         return;
     }
 
+    voiceRetry = 0;
+    startRecognition(SpeechRecognition, micButton, input);
+}
+
+function startRecognition(SpeechRecognition, micButton, input) {
     recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
+    recognition.lang = "en-US";
     recognition.interimResults = true;
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
+    voiceWasStarted = true;
 
     recognition.onstart = function() {
-        micButton.classList.add('listening');
-        micButton.textContent = '🔴';
-        input.placeholder = 'Listening... speak now';
-        input.value = '';
+        voiceRetry = 0;
+        micButton.classList.add("listening");
+        micButton.textContent = "🔴";
+        input.placeholder = "Listening... speak now";
+    };
+
+    recognition.onaudiostart = function() {
+        input.placeholder = "Listening... I can hear the microphone";
+    };
+
+    recognition.onspeechstart = function() {
+        input.placeholder = "Hearing you...";
     };
 
     recognition.onresult = function(event) {
-        let transcript = '';
+        let transcript = "";
+
         for (let i = event.resultIndex; i < event.results.length; i++) {
             transcript += event.results[i][0].transcript;
         }
+
         transcript = transcript.trim();
-        if (transcript) input.value = transcript;
+
+        if (transcript) {
+            input.value = transcript;
+        }
 
         const lastResult = event.results[event.results.length - 1];
+
         if (lastResult && lastResult.isFinal && transcript) {
-            setTimeout(function() { sendMessage(); }, 300);
+            voiceWasStarted = false;
+            setTimeout(function() {
+                sendMessage();
+            }, 300);
         }
     };
 
     recognition.onerror = function(event) {
-        console.log('Speech recognition error:', event.error);
-        micButton.classList.remove('listening');
-        micButton.textContent = '🎤';
-        input.placeholder = 'Talk to Alpha...';
+        console.log("Speech recognition error:", event.error);
 
-        let message = 'Voice error: ' + event.error + '. Please try again.';
-        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-            message = 'Microphone permission was blocked. Allow microphone access for Chrome.';
-        } else if (event.error === 'no-speech') {
-            message = 'I did not detect speech. Tap 🎤 and speak clearly.';
-        } else if (event.error === 'audio-capture') {
-            message = 'I cannot access the microphone. Check that another app is not using it.';
-        } else if (event.error === 'network') {
-            message = 'Speech recognition needs an internet connection. Check your internet.';
+        if (event.error === "aborted" && voiceRetry < 2 && voiceWasStarted) {
+            voiceRetry++;
+
+            setTimeout(function() {
+                if (voiceWasStarted) {
+                    startRecognition(SpeechRecognition, micButton, input);
+                }
+            }, 500);
+
+            return;
         }
+
+        voiceWasStarted = false;
+        micButton.classList.remove("listening");
+        micButton.textContent = "🎤";
+        input.placeholder = "Talk to Alpha...";
+
+        let message = "Voice error: " + event.error + ". Please try again.";
+
+        if (event.error === "no-speech") {
+            message = "No speech detected. Tap 🎤 and speak clearly.";
+        } else if (event.error === "not-allowed" ||
+                   event.error === "service-not-allowed") {
+            message = "Chrome does not have microphone permission. Allow microphone access for this site.";
+        } else if (event.error === "audio-capture") {
+            message = "Chrome cannot access the microphone. Check your phone microphone.";
+        } else if (event.error === "network") {
+            message = "Speech recognition needs an internet connection.";
+        }
+
         alert(message);
         recognition = null;
     };
 
     recognition.onend = function() {
-        micButton.classList.remove('listening');
-        micButton.textContent = '🎤';
-        input.placeholder = 'Talk to Alpha...';
-        recognition = null;
+        if (voiceWasStarted && voiceRetry > 0 && voiceRetry <= 2) {
+            return;
+        }
+
+        if (voiceWasStarted && !input.value.trim()) {
+            voiceWasStarted = false;
+            micButton.classList.remove("listening");
+            micButton.textContent = "🎤";
+            input.placeholder = "Talk to Alpha...";
+            recognition = null;
+            return;
+        }
+
+        if (!voiceWasStarted) {
+            micButton.classList.remove("listening");
+            micButton.textContent = "🎤";
+            input.placeholder = "Talk to Alpha...";
+            recognition = null;
+        }
     };
 
     try {
         recognition.start();
     } catch (error) {
-        console.log('Could not start speech recognition:', error);
-        micButton.classList.remove('listening');
-        micButton.textContent = '🎤';
-        input.placeholder = 'Talk to Alpha...';
+        console.log("Could not start speech recognition:", error);
+        voiceWasStarted = false;
+        micButton.classList.remove("listening");
+        micButton.textContent = "🎤";
+        input.placeholder = "Talk to Alpha...";
         recognition = null;
+        alert("Could not start voice input. Please tap 🎤 and try again.");
     }
 }
 
 async function sendMessage() {
-    const input = document.getElementById('message');
-    const chat = document.getElementById('chat');
+    const input = document.getElementById("message");
+    const chat = document.getElementById("chat");
     const message = input.value.trim();
+
     if (!message) return;
 
     chat.innerHTML += '<div class="message user">' + escapeHtml(message) + '</div>';
-    input.value = '';
+    input.value = "";
 
-    const thinking = document.createElement('div');
-    thinking.className = 'message alpha';
-    thinking.textContent = 'Thinking...';
+    const thinking = document.createElement("div");
+    thinking.className = "message alpha";
+    thinking.textContent = "Thinking...";
     chat.appendChild(thinking);
 
+    window.scrollTo(0, document.body.scrollHeight);
+
     try {
-        const response = await fetch('/chat', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({message: message})
+        const response = await fetch("/chat", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ message: message })
         });
+
         const data = await response.json();
+
         if (data.reply) {
             thinking.textContent = data.reply;
             speak(data.reply);
         } else {
-            thinking.textContent = data.error || 'Something went wrong.';
+            thinking.textContent = data.error || "Something went wrong.";
         }
     } catch (error) {
-        thinking.textContent = 'Connection error. Please try again.';
+        thinking.textContent = "Connection error. Please try again.";
         console.error(error);
     }
 }
 
 function escapeHtml(text) {
-    const div = document.createElement('div');
+    const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
 }
 
-document.getElementById('message').addEventListener('keydown', function(event) {
-    if (event.key === 'Enter') sendMessage();
+document.getElementById("message").addEventListener("keydown", function(event) {
+    if (event.key === "Enter") {
+        sendMessage();
+    }
 });
 </script>
 </body>
