@@ -151,7 +151,7 @@ button{border:none;border-radius:12px;color:#fff;font-size:18px;min-width:48px;p
 #sendButton{background:#2b6cff}
 button:disabled{opacity:.55;cursor:not-allowed}
 @keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
-@media(max-width:700px){#sidebar{display:none}}
+@media(max-width:700px){ #sidebar{display:none} }
 </style>
 </head>
 <body>
@@ -164,7 +164,15 @@ button:disabled{opacity:.55;cursor:not-allowed}
 <header>🤖 Project Alpha</header>
 <div id="chat"></div>
 <div id="status" class="status"></div>
+
+<div id="imagePanel" style="display:none;padding:10px;background:#181d25;border-top:1px solid #2a303a">
+  <input id="imageFile" type="file" accept="image/*" style="width:100%;margin-bottom:8px">
+  <input id="imagePrompt" placeholder="Tell Alpha how to edit this picture..." style="width:100%;margin-bottom:8px">
+  <button id="editButton" onclick="editImage()" style="background:#7b3cff;width:100%;padding:12px">🎨 Edit / Generate Image</button>
+</div>
+
 <div class="composer">
+<button id="imageButton" onclick="toggleImagePanel()">🖼️</button>
 <button id="micButton" onclick="toggleRecording()">🎤</button>
 <input id="message" placeholder="Talk to Alpha..." autocomplete="off">
 <button id="sendButton" onclick="sendMessage()">➤</button>
@@ -257,6 +265,58 @@ async function sendMessage(textFromVoice=null){
   setStatus("");await loadHistory();
  }catch(e){addMessage("Sorry, something went wrong: "+e.message,"alpha");setStatus("")}
  finally{sendButton.disabled=false;messageInput.focus()}
+}
+
+
+function toggleImagePanel(){
+ const panel=document.getElementById("imagePanel");
+ panel.style.display=(panel.style.display==="none"?"block":"none");
+}
+
+async function editImage(){
+ const file=document.getElementById("imageFile").files[0];
+ const prompt=document.getElementById("imagePrompt").value.trim();
+
+ if(!prompt){
+   alert("Tell Alpha what you want it to do with the image.");
+   return;
+ }
+
+ setStatus(file ? "🎨 Editing your image..." : "🎨 Generating image...");
+ const button=document.getElementById("editButton");
+ button.disabled=true;
+
+ try{
+   const fd=new FormData();
+   fd.append("prompt",prompt);
+   if(file) fd.append("image",file);
+
+   const r=await fetch("/image_edit",{method:"POST",body:fd});
+   const d=await r.json();
+   if(!r.ok) throw new Error(d.error||"Image operation failed.");
+
+   addImageMessage(d.image_url);
+   setStatus("✅ Image ready.");
+   document.getElementById("imagePanel").style.display="none";
+ }catch(e){
+   alert("Image error: "+e.message);
+   setStatus("");
+ }finally{
+   button.disabled=false;
+ }
+}
+
+function addImageMessage(url){
+ const div=document.createElement("div");
+ div.className="message alpha";
+ const img=document.createElement("img");
+ img.src=url;
+ img.style.maxWidth="100%";
+ img.style.borderRadius="12px";
+ img.style.display="block";
+ div.appendChild(img);
+ chat.appendChild(div);
+ chat.scrollTop=chat.scrollHeight;
 }
 
 async function toggleRecording(){if(isRecording)stopRecording();else await startRecording()}
@@ -446,6 +506,84 @@ def transcribe():
         }), 500
 
 
+
+@app.route("/image_edit", methods=["POST"])
+def image_edit():
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    if not openrouter_key:
+        return jsonify({"error": "OPENROUTER_API_KEY is not set."}), 500
+
+    prompt = str(request.form.get("prompt", "")).strip()
+    image = request.files.get("image")
+
+    if not prompt:
+        return jsonify({"error": "Please describe what you want the image to do."}), 400
+
+    try:
+        body = {
+            "model": "google/gemini-3.1-flash-image",
+            "prompt": prompt
+        }
+
+        if image:
+            raw = image.read()
+            if not raw:
+                return jsonify({"error": "The image file was empty."}), 400
+
+            if len(raw) > 8 * 1024 * 1024:
+                return jsonify({"error": "Please use an image smaller than 8 MB."}), 400
+
+            import base64
+            content_type = image.mimetype or "image/jpeg"
+            encoded = base64.b64encode(raw).decode("utf-8")
+
+            body["input_references"] = [{
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{content_type};base64,{encoded}"
+                }
+            }]
+
+        result = requests.post(
+            "https://openrouter.ai/api/v1/images",
+            headers={
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json"
+            },
+            json=body,
+            timeout=180
+        )
+
+        if not result.ok:
+            try:
+                err = result.json()
+                detail = err.get("error", {}).get("message", result.text)
+            except Exception:
+                detail = result.text[:1000]
+
+            return jsonify({
+                "error": f"Image API error (HTTP {result.status_code}): {detail}"
+            }), 502
+
+        result_data = result.json()
+        images = result_data.get("data") or []
+
+        if not images or not images[0].get("b64_json"):
+            return jsonify({"error": "The image service returned no image."}), 502
+
+        media_type = images[0].get("media_type") or "image/png"
+        image_url = f"data:{media_type};base64,{images[0]['b64_json']}"
+
+        return jsonify({
+            "image_url": image_url,
+            "cost": (result_data.get("usage") or {}).get("cost")
+        })
+
+    except requests.Timeout:
+        return jsonify({"error": "Image generation timed out. Please try again."}), 504
+    except Exception as e:
+        return jsonify({"error": f"Image operation failed: {str(e)}"}), 500
+
 @app.route("/chat", methods=["POST"])
 def chat():
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
@@ -511,15 +649,7 @@ When current information is needed, use the web search tool and clearly ground f
     messages.append({"role": "user", "content": message})
 
     payload = {
-        "model": "openrouter/free",
-        "tools": [
-            {
-                "type": "openrouter:web_search",
-                "parameters": {
-                    "max_results": 5
-                }
-            }
-        ],
+        "model": "openrouter/free:online",
         "messages": messages
     }
 
