@@ -20,6 +20,23 @@ def init_db():
             memory TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -44,6 +61,66 @@ def save_memory(user_id, memory):
     conn.close()
 
 
+def create_conversation(user_id, title="New chat"):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO conversations (user_id, title) VALUES (?, ?)",
+        (user_id, title[:80] or "New chat")
+    )
+    conversation_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return conversation_id
+
+
+def get_conversations(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT id, title, created_at
+           FROM conversations
+           WHERE user_id = ?
+           ORDER BY id DESC""",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_messages(conversation_id, user_id):
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT m.role, m.content, m.created_at
+           FROM messages m
+           JOIN conversations c ON c.id = m.conversation_id
+           WHERE m.conversation_id = ? AND c.user_id = ?
+           ORDER BY m.id ASC""",
+        (conversation_id, user_id)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def save_message(conversation_id, role, content):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
+        (conversation_id, role, content)
+    )
+    conn.commit()
+    conn.close()
+
+
+def rename_conversation(conversation_id, user_id, title):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        """UPDATE conversations SET title = ?
+           WHERE id = ? AND user_id = ?""",
+        (title[:80] or "New chat", conversation_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 init_db()
 
 HTML = """
@@ -54,369 +131,250 @@ HTML = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Project Alpha</title>
 <style>
-    * { box-sizing: border-box; }
-
-    body {
-        margin: 0;
-        background: #11151b;
-        color: #ffffff;
-        font-family: Arial, sans-serif;
-        height: 100vh;
-        display: flex;
-        flex-direction: column;
-    }
-
-    header {
-        padding: 16px 18px;
-        background: #181d25;
-        border-bottom: 1px solid #2a303a;
-        font-size: 20px;
-        font-weight: 700;
-    }
-
-    #chat {
-        flex: 1;
-        overflow-y: auto;
-        padding: 18px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .message {
-        max-width: 85%;
-        padding: 12px 14px;
-        border-radius: 16px;
-        line-height: 1.45;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-    }
-
-    .user {
-        align-self: flex-end;
-        background: #2b6cff;
-    }
-
-    .alpha {
-        align-self: flex-start;
-        background: #242a33;
-    }
-
-    .status {
-        text-align: center;
-        color: #aab2bf;
-        font-size: 13px;
-        min-height: 18px;
-        padding: 0 12px 6px;
-    }
-
-    .composer {
-        display: flex;
-        gap: 8px;
-        padding: 10px;
-        background: #181d25;
-        border-top: 1px solid #2a303a;
-    }
-
-    input {
-        flex: 1;
-        min-width: 0;
-        border: 1px solid #343b46;
-        background: #222832;
-        color: white;
-        border-radius: 12px;
-        padding: 13px 14px;
-        outline: none;
-        font-size: 16px;
-    }
-
-    button {
-        border: none;
-        border-radius: 12px;
-        color: white;
-        font-size: 18px;
-        min-width: 48px;
-        padding: 0 14px;
-        cursor: pointer;
-    }
-
-    #micButton {
-        background: #303641;
-    }
-
-    #micButton.recording {
-        background: #d22;
-        animation: pulse 1s infinite;
-    }
-
-    #sendButton {
-        background: #2b6cff;
-    }
-
-    button:disabled {
-        opacity: 0.55;
-        cursor: not-allowed;
-    }
-
-    @keyframes pulse {
-        0% { transform: scale(1); }
-        50% { transform: scale(1.06); }
-        100% { transform: scale(1); }
-    }
+*{box-sizing:border-box}
+body{margin:0;background:#11151b;color:#fff;font-family:Arial,sans-serif;height:100vh;display:flex}
+#sidebar{width:260px;background:#181d25;border-right:1px solid #2a303a;padding:12px;display:flex;flex-direction:column}
+#newChat{width:100%;padding:12px;border:0;border-radius:10px;background:#2b6cff;color:#fff;font-size:15px;margin-bottom:12px}
+#history{overflow-y:auto;flex:1}
+.history-item{padding:11px;border-radius:9px;margin-bottom:5px;color:#ddd;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-item:hover,.history-item.active{background:#29303a}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+header{padding:16px 18px;background:#181d25;border-bottom:1px solid #2a303a;font-size:20px;font-weight:700}
+#chat{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
+.message{max-width:85%;padding:12px 14px;border-radius:16px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word}
+.user{align-self:flex-end;background:#2b6cff}.alpha{align-self:flex-start;background:#242a33}
+.status{text-align:center;color:#aab2bf;font-size:13px;min-height:18px;padding:0 12px 6px}
+.composer{display:flex;gap:8px;padding:10px;background:#181d25;border-top:1px solid #2a303a}
+input{flex:1;min-width:0;border:1px solid #343b46;background:#222832;color:#fff;border-radius:12px;padding:13px 14px;outline:none;font-size:16px}
+button{border:none;border-radius:12px;color:#fff;font-size:18px;min-width:48px;padding:0 14px;cursor:pointer}
+#micButton{background:#303641}#micButton.recording{background:#d22;animation:pulse 1s infinite}
+#sendButton{background:#2b6cff}
+button:disabled{opacity:.55;cursor:not-allowed}
+@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
+@media(max-width:700px){#sidebar{display:none}}
 </style>
 </head>
-
 <body>
+<aside id="sidebar">
+<button id="newChat" onclick="newChat()">＋ New chat</button>
+<div id="history"></div>
+</aside>
+
+<section id="main">
 <header>🤖 Project Alpha</header>
-
-<div id="chat">
-    <div class="message alpha">Hello 👋 I'm Alpha. Type a message or tap 🎤 and talk to me.</div>
-</div>
-
+<div id="chat"></div>
 <div id="status" class="status"></div>
-
 <div class="composer">
-    <button id="micButton" onclick="toggleRecording()">🎤</button>
-    <input id="message" placeholder="Talk to Alpha..." autocomplete="off">
-    <button id="sendButton" onclick="sendMessage()">➤</button>
+<button id="micButton" onclick="toggleRecording()">🎤</button>
+<input id="message" placeholder="Talk to Alpha..." autocomplete="off">
+<button id="sendButton" onclick="sendMessage()">➤</button>
 </div>
+</section>
 
 <script>
-let mediaRecorder = null;
-let audioChunks = [];
-let isRecording = false;
-let recordingMimeType = "";
+let mediaRecorder=null,audioChunks=[],isRecording=false,recordingMimeType="";
+let currentChatId=null;
 
-const chat = document.getElementById("chat");
-const messageInput = document.getElementById("message");
-const micButton = document.getElementById("micButton");
-const sendButton = document.getElementById("sendButton");
-const statusBox = document.getElementById("status");
+const chat=document.getElementById("chat");
+const historyBox=document.getElementById("history");
+const messageInput=document.getElementById("message");
+const micButton=document.getElementById("micButton");
+const sendButton=document.getElementById("sendButton");
+const statusBox=document.getElementById("status");
 
-function addMessage(text, who) {
-    const div = document.createElement("div");
-    div.className = "message " + who;
-    div.textContent = text;
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
+function setStatus(t){statusBox.textContent=t||""}
+
+function addMessage(text,who){
+ const div=document.createElement("div");
+ div.className="message "+who;
+ div.textContent=text;
+ chat.appendChild(div);
+ chat.scrollTop=chat.scrollHeight;
 }
 
-function setStatus(text) {
-    statusBox.textContent = text || "";
+function speak(text){
+ if(!("speechSynthesis" in window))return;
+ speechSynthesis.cancel();
+ const u=new SpeechSynthesisUtterance(text);
+ u.lang="en-US";u.rate=1;u.pitch=1;speechSynthesis.speak(u);
 }
 
-function speak(text) {
-    if (!("speechSynthesis" in window)) return;
-
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-US";
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-
-    window.speechSynthesis.speak(utterance);
+async function loadHistory(){
+ try{
+  const r=await fetch("/history");
+  const d=await r.json();
+  historyBox.innerHTML="";
+  (d.conversations||[]).forEach(c=>{
+   const div=document.createElement("div");
+   div.className="history-item"+(String(c.id)===String(currentChatId)?" active":"");
+   div.textContent=c.title;
+   div.onclick=()=>openChat(c.id);
+   historyBox.appendChild(div);
+  });
+ }catch(e){}
 }
 
-async function sendMessage(textFromVoice = null) {
-    const text = (textFromVoice !== null ? textFromVoice : messageInput.value).trim();
-
-    if (!text) return;
-
-    addMessage(text, "user");
-    messageInput.value = "";
-    setStatus("Alpha is thinking...");
-    sendButton.disabled = true;
-
-    try {
-        const response = await fetch("/chat", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({message: text})
-        });
-
-        const raw = await response.text();
-        let data;
-
-        try {
-            data = JSON.parse(raw);
-        } catch (parseError) {
-            console.error("Server returned:", raw);
-            throw new Error(
-                "Alpha's server returned a non-JSON error (HTTP " +
-                response.status +
-                "). Please redeploy the latest main.py on Render."
-            );
-        }
-
-        if (!response.ok) {
-            throw new Error(data.error || "Chat request failed.");
-        }
-
-        addMessage(data.reply, "alpha");
-        speak(data.reply);
-        setStatus("");
-    } catch (error) {
-        addMessage("Sorry, something went wrong: " + error.message, "alpha");
-        setStatus("");
-    } finally {
-        sendButton.disabled = false;
-        messageInput.focus();
-    }
+async function openChat(id){
+ currentChatId=id;
+ chat.innerHTML="";
+ setStatus("Loading chat...");
+ try{
+  const r=await fetch("/history/"+id);
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.error||"Could not load chat.");
+  (d.messages||[]).forEach(m=>addMessage(m.content,m.role==="user"?"user":"alpha"));
+  setStatus("");
+  await loadHistory();
+ }catch(e){setStatus(e.message)}
 }
 
-async function toggleRecording() {
-    if (isRecording) {
-        stopRecording();
-    } else {
-        await startRecording();
-    }
+async function newChat(){
+ try{
+  const r=await fetch("/new_chat",{method:"POST"});
+  const d=await r.json();
+  currentChatId=d.id;
+  chat.innerHTML="";
+  addMessage("Hello 👋 I'm Alpha. Ask me anything, or tap 🎤 and talk to me.","alpha");
+  await loadHistory();
+ }catch(e){alert("Could not create a new chat: "+e.message)}
 }
 
-async function startRecording() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Your browser does not support microphone recording.");
-        return;
-    }
-
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-
-        let options = {};
-        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-            options.mimeType = "audio/webm;codecs=opus";
-        } else if (MediaRecorder.isTypeSupported("audio/webm")) {
-            options.mimeType = "audio/webm";
-        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-            options.mimeType = "audio/mp4";
-        }
-
-        mediaRecorder = new MediaRecorder(stream, options);
-        recordingMimeType = mediaRecorder.mimeType || "audio/webm";
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = function(event) {
-            if (event.data && event.data.size > 0) {
-                audioChunks.push(event.data);
-            }
-        };
-
-        mediaRecorder.onerror = function() {
-            setStatus("Microphone recording failed.");
-        };
-
-        mediaRecorder.onstop = async function() {
-            stream.getTracks().forEach(track => track.stop());
-
-            const blob = new Blob(audioChunks, {type: recordingMimeType});
-            audioChunks = [];
-
-            if (blob.size === 0) {
-                setStatus("");
-                alert("No audio was recorded. Please try again.");
-                return;
-            }
-
-            await transcribeAudio(blob);
-        };
-
-        mediaRecorder.start();
-        isRecording = true;
-        micButton.classList.add("recording");
-        micButton.textContent = "⏹️";
-        setStatus("🔴 Recording... tap the button again when you're done speaking.");
-    } catch (error) {
-        if (error.name === "NotAllowedError") {
-            alert("Microphone permission was denied. Allow microphone access for Alpha in Chrome settings.");
-        } else if (error.name === "NotFoundError") {
-            alert("No microphone was found on this device.");
-        } else {
-            alert("Could not start the microphone: " + error.message);
-        }
-    }
+async function sendMessage(textFromVoice=null){
+ const text=(textFromVoice!==null?textFromVoice:messageInput.value).trim();
+ if(!text)return;
+ addMessage(text,"user");messageInput.value="";
+ setStatus("Alpha is thinking...");sendButton.disabled=true;
+ try{
+  const response=await fetch("/chat",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({message:text,conversation_id:currentChatId})
+  });
+  const raw=await response.text();let data;
+  try{data=JSON.parse(raw)}catch(e){throw new Error("Server returned a non-JSON error (HTTP "+response.status+").")}
+  if(!response.ok)throw new Error(data.error||"Chat request failed.");
+  currentChatId=data.conversation_id;
+  addMessage(data.reply,"alpha");speak(data.reply);
+  setStatus("");await loadHistory();
+ }catch(e){addMessage("Sorry, something went wrong: "+e.message,"alpha");setStatus("")}
+ finally{sendButton.disabled=false;messageInput.focus()}
 }
 
-function stopRecording() {
-    if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+async function toggleRecording(){if(isRecording)stopRecording();else await startRecording()}
 
-    isRecording = false;
-    micButton.classList.remove("recording");
-    micButton.textContent = "🎤";
-    setStatus("⏳ Preparing your voice message...");
-    mediaRecorder.stop();
+async function startRecording(){
+ if(!navigator.mediaDevices?.getUserMedia){alert("Your browser does not support microphone recording.");return}
+ try{
+  const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  let options={};
+  if(MediaRecorder.isTypeSupported("audio/webm;codecs=opus"))options.mimeType="audio/webm;codecs=opus";
+  else if(MediaRecorder.isTypeSupported("audio/webm"))options.mimeType="audio/webm";
+  else if(MediaRecorder.isTypeSupported("audio/mp4"))options.mimeType="audio/mp4";
+  mediaRecorder=new MediaRecorder(stream,options);
+  recordingMimeType=mediaRecorder.mimeType||"audio/webm";audioChunks=[];
+  mediaRecorder.ondataavailable=e=>{if(e.data?.size>0)audioChunks.push(e.data)};
+  mediaRecorder.onerror=()=>setStatus("Microphone recording failed.");
+  mediaRecorder.onstop=async()=>{
+   stream.getTracks().forEach(t=>t.stop());
+   const blob=new Blob(audioChunks,{type:recordingMimeType});audioChunks=[];
+   if(!blob.size){setStatus("");alert("No audio was recorded.");return}
+   await transcribeAudio(blob);
+  };
+  mediaRecorder.start();isRecording=true;
+  micButton.classList.add("recording");micButton.textContent="⏹️";
+  setStatus("🔴 Recording... tap again when you're done.");
+ }catch(e){
+  if(e.name==="NotAllowedError")alert("Microphone permission was denied. Allow microphone access for Alpha in Chrome settings.");
+  else alert("Could not start microphone: "+e.message);
+ }
 }
 
-async function transcribeAudio(blob) {
-    setStatus("🧠 Converting your voice to text...");
-    micButton.disabled = true;
-
-    try {
-        const formData = new FormData();
-
-        let filename = "voice.webm";
-        if (blob.type.includes("mp4")) {
-            filename = "voice.mp4";
-        }
-
-        formData.append("audio", blob, filename);
-
-        const response = await fetch("/transcribe", {
-            method: "POST",
-            body: formData
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || "Transcription failed.");
-        }
-
-        const transcript = (data.text || "").trim();
-
-        if (!transcript) {
-            throw new Error("I could not detect any words. Please speak a little louder and try again.");
-        }
-
-        messageInput.value = transcript;
-        setStatus("✅ I heard: " + transcript);
-
-        await sendMessage(transcript);
-    } catch (error) {
-        setStatus("");
-        alert("Voice error: " + error.message);
-    } finally {
-        micButton.disabled = false;
-    }
+function stopRecording(){
+ if(!mediaRecorder||mediaRecorder.state==="inactive")return;
+ isRecording=false;micButton.classList.remove("recording");micButton.textContent="🎤";
+ setStatus("⏳ Preparing voice message...");mediaRecorder.stop();
 }
 
-messageInput.addEventListener("keydown", function(event) {
-    if (event.key === "Enter") {
-        event.preventDefault();
-        sendMessage();
-    }
-});
+async function transcribeAudio(blob){
+ setStatus("🧠 Converting your voice to text...");micButton.disabled=true;
+ try{
+  const fd=new FormData();fd.append("audio",blob,blob.type.includes("mp4")?"voice.mp4":"voice.webm");
+  const r=await fetch("/transcribe",{method:"POST",body:fd});
+  const d=await r.json();if(!r.ok)throw new Error(d.error||"Transcription failed.");
+  const text=(d.text||"").trim();if(!text)throw new Error("I could not detect any words.");
+  messageInput.value=text;setStatus("✅ I heard: "+text);await sendMessage(text);
+ }catch(e){setStatus("");alert("Voice error: "+e.message)}
+ finally{micButton.disabled=false}
+}
+
+messageInput.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();sendMessage()}});
+
+(async()=>{
+ await loadHistory();
+ const r=await fetch("/current_chat");
+ const d=await r.json();
+ if(d.id)await openChat(d.id);else await newChat();
+})();
 </script>
 </body>
 </html>
 """
 
 
+
 @app.route("/")
 def home():
-    user_id = request.cookies.get("alpha_user_id")
-
-    if not user_id:
-        user_id = str(uuid.uuid4())
+    user_id = request.cookies.get("alpha_user_id") or str(uuid.uuid4())
+    chat_id = request.cookies.get("alpha_chat_id")
 
     response = make_response(render_template_string(HTML))
-    response.set_cookie(
-        "alpha_user_id",
-        user_id,
-        max_age=60 * 60 * 24 * 365,
-        httponly=True,
-        samesite="Lax"
-    )
+    response.set_cookie("alpha_user_id", user_id, max_age=60*60*24*365, httponly=True, samesite="Lax")
+
+    if not chat_id:
+        chat_id = str(create_conversation(user_id))
+    response.set_cookie("alpha_chat_id", chat_id, max_age=60*60*24*365, httponly=True, samesite="Lax")
     return response
+
+
+@app.route("/current_chat")
+def current_chat():
+    user_id = request.cookies.get("alpha_user_id") or str(uuid.uuid4())
+    chat_id = request.cookies.get("alpha_chat_id")
+
+    if not chat_id:
+        chat_id = str(create_conversation(user_id))
+
+    return jsonify({"id": int(chat_id)})
+
+
+@app.route("/new_chat", methods=["POST"])
+def new_chat():
+    user_id = request.cookies.get("alpha_user_id") or str(uuid.uuid4())
+    chat_id = create_conversation(user_id)
+    response = jsonify({"id": chat_id})
+    response.set_cookie("alpha_chat_id", str(chat_id), max_age=60*60*24*365, httponly=True, samesite="Lax")
+    return response
+
+
+@app.route("/history")
+def history():
+    user_id = request.cookies.get("alpha_user_id") or str(uuid.uuid4())
+    rows = get_conversations(user_id)
+    return jsonify({
+        "conversations": [
+            {"id": r[0], "title": r[1], "created_at": r[2]} for r in rows
+        ]
+    })
+
+
+@app.route("/history/<int:conversation_id>")
+def history_chat(conversation_id):
+    user_id = request.cookies.get("alpha_user_id") or str(uuid.uuid4())
+    rows = get_messages(conversation_id, user_id)
+    return jsonify({
+        "messages": [
+            {"role": r[0], "content": r[1], "created_at": r[2]} for r in rows
+        ]
+    })
 
 
 @app.route("/transcribe", methods=["POST"])
@@ -491,61 +449,78 @@ def transcribe():
 @app.route("/chat", methods=["POST"])
 def chat():
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-
     if not openrouter_key:
-        return jsonify({
-            "error": "OPENROUTER_API_KEY is not set."
-        }), 500
+        return jsonify({"error": "OPENROUTER_API_KEY is not set."}), 500
 
     data = request.get_json(silent=True) or {}
     message = str(data.get("message", "")).strip()
-
     if not message:
         return jsonify({"error": "Message is empty."}), 400
 
-    user_id = request.cookies.get("alpha_user_id")
+    user_id = request.cookies.get("alpha_user_id") or str(uuid.uuid4())
+    conversation_id = data.get("conversation_id") or request.cookies.get("alpha_chat_id")
 
-    if not user_id:
-        user_id = str(uuid.uuid4())
+    try:
+        conversation_id = int(conversation_id) if conversation_id else None
+    except Exception:
+        conversation_id = None
+
+    if not conversation_id:
+        conversation_id = create_conversation(user_id, message[:80])
+    else:
+        existing = get_messages(conversation_id, user_id)
+        if not existing:
+            conn = sqlite3.connect(DB_FILE)
+            row = conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id)
+            ).fetchone()
+            conn.close()
+            if not row:
+                conversation_id = create_conversation(user_id, message[:80])
 
     lower_message = message.lower()
 
     if lower_message.startswith("remember that "):
         memory = message[len("remember that "):].strip()
-
         if memory:
             save_memory(user_id, memory)
-
-        return jsonify({
-            "reply": "Got it. I'll remember that for this browser."
-        })
+        save_message(conversation_id, "user", message)
+        reply = "Got it. I'll remember that for this browser."
+        save_message(conversation_id, "assistant", reply)
+        response = jsonify({"reply": reply, "conversation_id": conversation_id})
+        response.set_cookie("alpha_chat_id", str(conversation_id), max_age=60*60*24*365, httponly=True, samesite="Lax")
+        return response
 
     memories = get_memories(user_id)
-
     system_prompt = """You are Alpha, a friendly personal AI assistant.
 You are used by multiple people.
 Each person has separate private memories.
 Never reveal one person's memories to another person.
 Be helpful, natural, and concise.
+When current information is needed, use the web search tool and clearly ground factual claims in the sources you find.
 """
 
     if memories:
-        system_prompt += "\nPrivate memories for this user:\n"
-        for memory in memories:
-            system_prompt += f"- {memory}\n"
+        system_prompt += "\nPrivate memories for this user:\n" + "".join(f"- {m}\n" for m in memories)
+
+    previous = get_messages(conversation_id, user_id)
+    messages = [{"role": "system", "content": system_prompt}]
+    for role, content, _ in previous[-20:]:
+        messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": message})
 
     payload = {
-        "model": "openrouter/free:online",
-        "messages": [
+        "model": "openrouter/free",
+        "tools": [
             {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": message
+                "type": "openrouter:web_search",
+                "parameters": {
+                    "max_results": 5
+                }
             }
-        ]
+        ],
+        "messages": messages
     }
 
     try:
@@ -556,57 +531,40 @@ Be helpful, natural, and concise.
                 "Content-Type": "application/json"
             },
             json=payload,
-            timeout=60
+            timeout=90
         )
 
         if result.status_code != 200:
             try:
                 upstream = result.json()
-                error_obj = upstream.get("error", {})
-                detail = error_obj.get("message", result.text)
+                detail = upstream.get("error", {}).get("message", result.text)
             except Exception:
                 detail = result.text[:1000]
+            return jsonify({"error": f"OpenRouter error (HTTP {result.status_code}): {detail}"}), 502
 
-            return jsonify({
-                "error": f"OpenRouter error (HTTP {result.status_code}): {detail}"
-            }), 502
+        result_data = result.json()
+        reply = result_data["choices"][0]["message"]["content"]
 
-        try:
-            result_data = result.json()
-            choices = result_data.get("choices", [])
-            if not choices:
-                return jsonify({
-                    "error": "OpenRouter returned no choices."
-                }), 502
+        save_message(conversation_id, "user", message)
+        save_message(conversation_id, "assistant", reply)
 
-            reply = choices[0].get("message", {}).get("content")
+        # Give the conversation a useful title from the first user message.
+        if len(previous) == 0:
+            rename_conversation(conversation_id, user_id, message[:80])
 
-            if not reply:
-                return jsonify({
-                    "error": "OpenRouter returned an empty reply."
-                }), 502
-
-        except Exception as e:
-            return jsonify({
-                "error": f"OpenRouter returned an unexpected response: {str(e)}"
-            }), 502
-
-        return jsonify({"reply": reply})
+        response = jsonify({
+            "reply": reply,
+            "conversation_id": conversation_id
+        })
+        response.set_cookie("alpha_chat_id", str(conversation_id), max_age=60*60*24*365, httponly=True, samesite="Lax")
+        return response
 
     except requests.Timeout:
-        return jsonify({
-            "error": "The AI request timed out. Please try again."
-        }), 504
-
+        return jsonify({"error": "The AI request timed out. Please try again."}), 504
     except requests.RequestException as e:
-        return jsonify({
-            "error": f"Could not reach OpenRouter: {str(e)}"
-        }), 502
-
+        return jsonify({"error": f"Could not reach OpenRouter: {str(e)}"}), 502
     except Exception as e:
-        return jsonify({
-            "error": f"AI request failed: {str(e)}"
-        }), 500
+        return jsonify({"error": f"AI request failed: {str(e)}"}), 500
 
 
 if __name__ == "__main__":
