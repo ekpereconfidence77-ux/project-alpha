@@ -5,9 +5,13 @@ import base64
 import io
 import requests
 from PIL import Image
-from flask import Flask, request, jsonify, make_response, render_template_string
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or uuid.uuid4().hex
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 DB_FILE = "alpha_memory.db"
 
@@ -19,6 +23,15 @@ CHAT_MODEL = "openrouter/free"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
@@ -176,13 +189,106 @@ def conversation_belongs_to_user(conversation_id, user_id):
 init_db()
 
 
+def get_current_user_id():
+    value = session.get("user_id")
+    return str(value) if value is not None else None
+
+
+def login_required_page(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not get_current_user_id():
+            return redirect("/login")
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def login_required_api(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        user_id = get_current_user_id()
+        if not user_id:
+            return jsonify({"error": "Please log in to use Dax."}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Dax — Sign in</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#11151b;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{width:100%;max-width:420px;background:#181d25;border:1px solid #2a303a;border-radius:18px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+.logo{font-size:28px;font-weight:700;text-align:center;margin-bottom:8px}
+.sub{text-align:center;color:#aab2bf;margin-bottom:24px}
+.tabs{display:flex;gap:6px;background:#11151b;border-radius:12px;padding:4px;margin-bottom:18px}
+.tabs button{flex:1;border:0;border-radius:9px;padding:10px;background:transparent;color:#aab2bf;cursor:pointer;font-size:14px}
+.tabs button.active{background:#29303a;color:#fff}
+label{display:block;font-size:13px;color:#cbd1d9;margin:0 0 6px}
+input{width:100%;padding:13px 14px;border:1px solid #343b46;border-radius:12px;background:#222832;color:#fff;outline:none;font-size:16px;margin-bottom:14px}
+button.primary{width:100%;border:0;border-radius:12px;padding:13px;background:#fff;color:#11151b;font-weight:700;font-size:15px;cursor:pointer}
+.error{min-height:20px;color:#ff8f8f;font-size:13px;margin:4px 0 12px;text-align:center}
+.note{font-size:12px;color:#7f8997;text-align:center;margin-top:18px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="logo">Dax</div>
+<div class="sub">Your personal AI assistant</div>
+<div class="tabs">
+<button id="loginTab" class="active" onclick="showMode('login')">Log in</button>
+<button id="registerTab" onclick="showMode('register')">Create account</button>
+</div>
+<form onsubmit="submitAuth(event)">
+<label for="email">Email</label>
+<input id="email" type="email" autocomplete="email" required placeholder="you@example.com">
+<label for="password">Password</label>
+<input id="password" type="password" autocomplete="current-password" required placeholder="At least 8 characters">
+<div id="error" class="error"></div>
+<button id="submit" class="primary" type="submit">Log in</button>
+</form>
+<div class="note">Use an email address and password to keep your Dax chats and memories connected to your account.</div>
+</div>
+<script>
+let mode='login';
+function showMode(next){
+ mode=next;
+ document.getElementById('loginTab').classList.toggle('active',mode==='login');
+ document.getElementById('registerTab').classList.toggle('active',mode==='register');
+ document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';
+ document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';
+ document.getElementById('error').textContent='';
+}
+async function submitAuth(e){
+ e.preventDefault();
+ const button=document.getElementById('submit');
+ const error=document.getElementById('error');
+ error.textContent=''; button.disabled=true;
+ try{
+   const r=await fetch(mode==='login'?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
+   const d=await r.json();
+   if(!r.ok) throw new Error(d.error||'Authentication failed.');
+   location.href='/';
+ }catch(err){error.textContent=err.message;}finally{button.disabled=false;}
+}
+</script>
+</body>
+</html>
+"""
+
+
 HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Project Alpha</title>
+<title>Dax</title>
 
 <style>
 *{box-sizing:border-box}
@@ -267,6 +373,80 @@ header{
     scroll-behavior:smooth
 }
 
+.dax-welcome{
+    width:100%;
+    max-width:820px;
+    margin:auto;
+    padding:30px 8px 24px;
+    text-align:center;
+}
+
+.dax-welcome h1{
+    margin:0 0 8px;
+    font-size:28px;
+    font-weight:650;
+    letter-spacing:-.4px;
+}
+
+.dax-welcome p{
+    margin:0 0 22px;
+    color:#9aa3af;
+    font-size:15px;
+}
+
+.dax-suggestions{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:10px;
+    text-align:left;
+}
+
+.dax-suggestion{
+    width:100%;
+    height:auto;
+    min-height:72px;
+    border:1px solid #303743;
+    border-radius:14px;
+    background:#1b2028;
+    color:#e8ebef;
+    padding:13px 14px;
+    cursor:pointer;
+    font-size:14px;
+    line-height:1.4;
+    text-align:left;
+    transition:background .15s,border-color .15s,transform .15s;
+}
+
+.dax-suggestion:hover{
+    background:#232a34;
+    border-color:#454e5d;
+    transform:translateY(-1px);
+}
+
+.dax-suggestion strong{
+    display:block;
+    margin-bottom:4px;
+    font-size:14px;
+}
+
+.dax-suggestion span{
+    display:block;
+    color:#9da6b3;
+    font-size:12px;
+}
+
+@media(max-width:600px){
+    .dax-welcome{
+        padding:24px 4px 18px;
+    }
+    .dax-welcome h1{
+        font-size:25px;
+    }
+    .dax-suggestions{
+        grid-template-columns:1fr;
+    }
+}
+
 .message{
     width:100%;
     max-width:820px;
@@ -297,6 +477,10 @@ header{
 .user{
     color:#fff
 }
+
+.message-body{line-height:1.6;overflow-wrap:anywhere}
+.message-body a{color:#7db7ff;text-decoration:underline}
+.message-body code{background:#222832;border:1px solid #343b46;border-radius:5px;padding:2px 5px;font-family:monospace}
 
 .alpha{
     align-self:center;
@@ -558,13 +742,16 @@ button:disabled{
     <button id="closeHistory" onclick="closeHistory()">✕ Close history</button>
     <button id="newChat" onclick="newChat()">＋ New chat</button>
     <div id="history"></div>
+    <div style="border-top:1px solid #2a303a;padding-top:10px;margin-top:10px">
+        <button id="logoutButton" onclick="logout()" style="width:100%;padding:10px;border:1px solid #343b46;border-radius:10px;background:#222832;color:#ddd;cursor:pointer">Log out</button>
+    </div>
 </aside>
 
 <div id="historyOverlay" onclick="closeHistory()"></div>
 
 <section id="main">
 
-<header><button id="historyToggle" onclick="toggleHistory()">☰</button>🤖 Project Alpha</header>
+<header><button id="historyToggle" onclick="toggleHistory()">☰</button>Dax</header>
 
 <div id="chat"></div>
 
@@ -582,7 +769,7 @@ button:disabled{
     <div id="imagePreview"></div>
 
     <div style="font-size:13px;opacity:.75;margin:6px 0">
-        Add photos only when you want Alpha to use them for this image request. They are cleared automatically after a successful edit.
+        Add photos only when you want Dax to use them for this image request. They are cleared automatically after a successful edit.
     </div>
 
     <div
@@ -594,7 +781,7 @@ button:disabled{
 
     <input
         id="imagePrompt"
-        placeholder="Tell Alpha how to edit the selected photos..."
+        placeholder="Tell Dax how to edit the selected photos..."
     >
 
     <button
@@ -625,7 +812,7 @@ button:disabled{
     <textarea
         id="message"
         rows="1"
-        placeholder="Message Alpha..."
+        placeholder="Message Dax..."
         autocomplete="off"
         enterkeyhint="send"
     ></textarea>
@@ -660,6 +847,77 @@ function setStatus(t){
     statusBox.textContent=t||"";
 }
 
+function showWelcome(){
+    chat.innerHTML="";
+
+    const wrap=document.createElement("div");
+    wrap.className="dax-welcome";
+
+    const title=document.createElement("h1");
+    title.textContent="How can I help you today?";
+    wrap.appendChild(title);
+
+    const sub=document.createElement("p");
+    sub.textContent="Ask Dax anything, or start with a suggestion below.";
+    wrap.appendChild(sub);
+
+    const grid=document.createElement("div");
+    grid.className="dax-suggestions";
+
+    const suggestions=[
+        ["✍️ Write something", "Draft a message, email, caption or story", "Write a professional message for me"],
+        ["💡 Brainstorm ideas", "Get ideas for a project, business or content", "Give me 10 ideas for a new project"],
+        ["📚 Learn something", "Explain a topic simply and step by step", "Explain this topic to me like a beginner"],
+        ["🖼️ Edit a photo", "Upload photos and tell Dax what to change", "Help me edit a photo professionally"]
+    ];
+
+    suggestions.forEach(item=>{
+        const button=document.createElement("button");
+        button.type="button";
+        button.className="dax-suggestion";
+        button.innerHTML="<strong>"+item[0]+"</strong><span>"+item[1]+"</span>";
+        button.onclick=()=>{
+            if(item[2].startsWith("Help me edit")){
+                toggleImagePanel();
+                messageInput.focus();
+                return;
+            }
+            messageInput.value=item[2];
+            autoResize();
+            messageInput.focus();
+        };
+        grid.appendChild(button);
+    });
+
+    wrap.appendChild(grid);
+    chat.appendChild(wrap);
+}
+
+function escapeHtml(value){
+    return String(value)
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/\"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+}
+
+function renderDaxMarkdown(text){
+    let safe=escapeHtml(text);
+
+    // Markdown links are generated by Dax for verified web references.
+    safe=safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+
+    safe=safe.replace(/`([^`]+)`/g,"<code>$1</code>");
+    safe=safe.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");
+    safe=safe.replace(/(^|\n)#{1,3}\s+(.+)/g,"$1<strong>$2</strong>");
+    safe=safe.replace(/\n/g,"<br>");
+
+    return safe;
+}
+
 function addMessage(text,who){
     const div=document.createElement("div");
     div.className="message "+who;
@@ -675,16 +933,9 @@ function addMessage(text,who){
         bubble.style.textAlign="left";
         div.appendChild(bubble);
     }else{
-        const label=document.createElement("div");
-        label.textContent="🤖 Alpha";
-        label.style.fontWeight="700";
-        label.style.fontSize="13px";
-        label.style.marginBottom="4px";
-        label.style.opacity=".9";
-        div.appendChild(label);
-
         const body=document.createElement("div");
-        body.textContent=text;
+        body.className="message-body";
+        body.innerHTML=renderDaxMarkdown(text);
         div.appendChild(body);
 
         const actions=document.createElement("div");
@@ -752,9 +1003,15 @@ function closeHistory(){
     document.body.classList.remove("history-open");
 }
 
+async function logout(){
+    if(!confirm("Log out of Dax?")) return;
+    try{ await fetch("/logout",{method:"POST"}); }finally{ location.href="/login"; }
+}
+
 async function loadHistory(){
     try{
         const r=await fetch("/history");
+        if(r.status===401){ location.href="/login"; return; }
         const d=await r.json();
 
         historyBox.innerHTML="";
@@ -802,10 +1059,7 @@ async function openChat(id){
         });
 
         if(savedMessages.length===0){
-            addMessage(
-                "Hello 👋 I’m Alpha. How can I help you today?",
-                "alpha"
-            );
+            showWelcome();
         }
 
         setStatus("");
@@ -830,10 +1084,7 @@ async function newChat(){
         currentChatId=d.id;
         chat.innerHTML="";
 
-        addMessage(
-            "Hello 👋 I’m Alpha. How can I help you today?",
-            "alpha"
-        );
+        showWelcome();
 
         await loadHistory();
 
@@ -898,7 +1149,7 @@ async function sendMessage(textFromVoice=null){
         removeTyping();
         addMessage(data.reply,"alpha");
 
-        // Alpha does NOT read replies automatically.
+        // Dax does NOT read replies automatically.
         // Use the "🔊 Read aloud" button on a reply when requested.
         setStatus("");
 
@@ -958,7 +1209,7 @@ async function editImage(){
 
     if(!prompt){
         alert(
-            "Tell Alpha what you want it to do with the selected photos."
+            "Tell Dax what you want it to do with the selected photos."
         );
         return;
     }
@@ -1010,7 +1261,7 @@ async function editImage(){
             d=JSON.parse(raw);
         }catch(e){
             throw new Error(
-                "Alpha server returned HTML instead of JSON "+
+                "Dax server returned HTML instead of JSON "+
                 "(HTTP "+r.status+"). Refresh and try again."
             );
         }
@@ -1290,7 +1541,7 @@ async function startRecording(){
 
             alert(
                 "Microphone permission was denied. "+
-                "Allow microphone access for Alpha in Chrome settings."
+                "Allow microphone access for Dax in Chrome settings."
             );
 
         }else{
@@ -1440,50 +1691,91 @@ messageInput.addEventListener("paste",()=>{
 
 
 @app.route("/")
+@login_required_page
 def home():
-
-    user_id = (
-        request.cookies.get("alpha_user_id")
-        or str(uuid.uuid4())
-    )
-
+    user_id = get_current_user_id()
     chat_id = request.cookies.get("alpha_chat_id")
 
-    if not chat_id:
-        chat_id = str(
-            create_conversation(user_id)
-        )
+    if not chat_id or not conversation_belongs_to_user(chat_id, user_id):
+        chat_id = str(create_conversation(user_id))
 
-    response = make_response(
-        render_template_string(HTML)
-    )
+    response = make_response(render_template_string(HTML))
+    response.set_cookie("alpha_chat_id", chat_id, max_age=60*60*24*365, httponly=True, samesite="Lax")
+    return response
 
-    response.set_cookie(
-        "alpha_user_id",
-        user_id,
-        max_age=60*60*24*365,
-        httponly=True,
-        samesite="Lax"
-    )
 
-    response.set_cookie(
-        "alpha_chat_id",
-        chat_id,
-        max_age=60*60*24*365,
-        httponly=True,
-        samesite="Lax"
-    )
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        if get_current_user_id():
+            return redirect("/")
+        return render_template_string(LOGIN_HTML)
 
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", ""))
+    if not email or "@" not in email:
+        return jsonify({"error": "Enter a valid email address."}), 400
+    if not password:
+        return jsonify({"error": "Enter your password."}), 400
+
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    if not row or not check_password_hash(row[1], password):
+        return jsonify({"error": "Incorrect email or password."}), 401
+
+    session.clear()
+    session["user_id"] = row[0]
+    return jsonify({"success": True})
+
+
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", ""))
+    if not email or "@" not in email:
+        return jsonify({"error": "Enter a valid email address."}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters."}), 400
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
+        user_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "An account with that email already exists. Log in instead."}), 409
+
+    session.clear()
+    session["user_id"] = user_id
+    return jsonify({"success": True})
+
+
+@app.route("/me")
+@login_required_api
+def me():
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT email FROM users WHERE id = ?", (get_current_user_id(),)).fetchone()
+    conn.close()
+    return jsonify({"email": row[0] if row else ""})
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    response = jsonify({"success": True})
+    response.delete_cookie("alpha_chat_id")
     return response
 
 
 @app.route("/current_chat")
+@login_required_api
 def current_chat():
 
-    user_id = (
-        request.cookies.get("alpha_user_id")
-        or str(uuid.uuid4())
-    )
+    user_id = get_current_user_id()
 
     chat_id = request.cookies.get(
         "alpha_chat_id"
@@ -1500,12 +1792,10 @@ def current_chat():
 
 
 @app.route("/new_chat", methods=["POST"])
+@login_required_api
 def new_chat():
 
-    user_id = (
-        request.cookies.get("alpha_user_id")
-        or str(uuid.uuid4())
-    )
+    user_id = get_current_user_id()
 
     chat_id=create_conversation(user_id)
 
@@ -1525,12 +1815,10 @@ def new_chat():
 
 
 @app.route("/history")
+@login_required_api
 def history():
 
-    user_id = (
-        request.cookies.get("alpha_user_id")
-        or str(uuid.uuid4())
-    )
+    user_id = get_current_user_id()
 
     rows=get_conversations(user_id)
 
@@ -1547,12 +1835,10 @@ def history():
 
 
 @app.route("/history/<int:conversation_id>")
+@login_required_api
 def history_chat(conversation_id):
 
-    user_id = (
-        request.cookies.get("alpha_user_id")
-        or str(uuid.uuid4())
-    )
+    user_id = get_current_user_id()
 
     rows=get_messages(
         conversation_id,
@@ -1572,6 +1858,7 @@ def history_chat(conversation_id):
 
 
 @app.route("/chat", methods=["POST"])
+@login_required_api
 def chat():
 
     api_key=os.environ.get(
@@ -1597,10 +1884,7 @@ def chat():
             "error":"Message cannot be empty."
         }),400
 
-    user_id=(
-        request.cookies.get("alpha_user_id")
-        or str(uuid.uuid4())
-    )
+    user_id = get_current_user_id()
 
     conversation_id=data.get(
         "conversation_id"
@@ -1624,7 +1908,7 @@ def chat():
             user_message[:80]
         )
 
-    # Save a memory when the user explicitly asks Alpha to remember something.
+    # Save a memory when the user explicitly asks Dax to remember something.
     lower=user_message.lower()
 
     memory_prefixes=[
@@ -1662,7 +1946,7 @@ def chat():
     )
 
     system_prompt="""
-You are Alpha, a helpful personal AI assistant.
+You are Dax, a helpful personal AI assistant.
 
 Be friendly, clear, practical and honest.
 
@@ -1673,9 +1957,17 @@ Do not claim that you completed an action that you did not actually complete.
 
 When the user asks for image editing, help them write precise
 image-editing instructions, but the actual image generation
-is handled by Alpha's image tool in the interface.
+is handled by Dax's image tool in the interface.
 
 Keep answers reasonably concise unless the user asks for detail.
+
+When the web-search tool is available and you use information from the web,
+include clickable Markdown citations such as [Reuters](https://www.reuters.com/...)
+next to the relevant claims. At the end, include a short **Sources** section
+with the most important sources. Never invent a source or URL.
+For questions that need current, changing, or recently published information,
+use the web-search tool before answering. For stable everyday questions, do not
+search unless it would materially improve accuracy.
 """.strip()
 
     if memories:
@@ -1720,7 +2012,7 @@ Keep answers reasonably concise unless the user asks for detail.
                 "HTTP-Referer":
                 request.host_url.rstrip("/"),
                 "X-Title":
-                "Project Alpha"
+                "Dax"
             },
             json={
                 "model":CHAT_MODEL,
@@ -1728,10 +2020,44 @@ Keep answers reasonably concise unless the user asks for detail.
                 "temperature":0.7,
                 # Prevent OpenRouter from reserving an unnecessarily large
                 # output budget (the previous request could default to 65,536).
-                "max_tokens":8192
+                "max_tokens":8192,
+                "tools":[
+                    {
+                        "type":"openrouter:web_search",
+                        "parameters":{
+                            "max_results":5,
+                            "max_total_results":10,
+                            "search_context_size":"medium"
+                        }
+                    }
+                ]
             },
             timeout=120
         )
+
+        # If web search is unavailable because the OpenRouter account cannot
+        # pay for a search request, retry ordinary chat so Dax does not become
+        # unusable. The fallback is intentionally not presented as web-grounded.
+        if result.status_code == 402:
+            fallback_payload={
+                "model":CHAT_MODEL,
+                "messages":messages,
+                "temperature":0.7,
+                "max_tokens":8192
+            }
+            fallback=requests.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization":f"Bearer {api_key}",
+                    "Content-Type":"application/json",
+                    "HTTP-Referer":request.host_url.rstrip("/"),
+                    "X-Title":"Dax"
+                },
+                json=fallback_payload,
+                timeout=120
+            )
+            if fallback.ok:
+                result=fallback
 
         if not result.ok:
 
@@ -1790,7 +2116,7 @@ Keep answers reasonably concise unless the user asks for detail.
         if not reply:
             return jsonify({
                 "error":
-                "Alpha received an empty response."
+                "Dax received an empty response."
             }),502
 
         save_message(
@@ -1831,7 +2157,7 @@ Keep answers reasonably concise unless the user asks for detail.
 
         return jsonify({
             "error":
-            "Alpha timed out while contacting the AI. Please try again."
+            "Dax timed out while contacting the AI. Please try again."
         }),504
 
     except requests.RequestException as e:
@@ -1850,6 +2176,7 @@ Keep answers reasonably concise unless the user asks for detail.
 
 
 @app.route("/transcribe", methods=["POST"])
+@login_required_api
 def transcribe():
 
     groq_key=os.environ.get(
@@ -1972,9 +2299,10 @@ def transcribe():
 
 
 @app.route("/image_edit", methods=["POST"])
+@login_required_api
 def image_edit():
     """
-    Alpha image editor using Cloudflare Workers AI FLUX.2 Klein 4B.
+    Dax image editor using Cloudflare Workers AI FLUX.2 Klein 4B.
 
     Cloudflare supports up to 4 reference images for this model.
     Reference images are resized to fit Cloudflare's <512x512 input limit.
@@ -1999,7 +2327,7 @@ def image_edit():
 
     if not prompt:
         return jsonify({
-            "error": "Please describe the final image you want Alpha to create."
+            "error": "Please describe the final image you want Dax to create."
         }), 400
 
     # FLUX.2 Klein 4B supports a maximum of 4 reference images.
