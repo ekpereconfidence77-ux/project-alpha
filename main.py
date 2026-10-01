@@ -2,7 +2,9 @@ import os
 import uuid
 import sqlite3
 import base64
+import io
 import requests
+from PIL import Image
 from flask import Flask, request, jsonify, make_response, render_template_string
 
 app = Flask(__name__)
@@ -10,11 +12,9 @@ app = Flask(__name__)
 DB_FILE = "alpha_memory.db"
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_IMAGE_URL = "https://openrouter.ai/api/v1/images"
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 CHAT_MODEL = "openai/gpt-5.6-luna"
-IMAGE_MODEL = "google/gemini-3.1-flash-image"
 
 
 def init_db():
@@ -699,8 +699,8 @@ async function editImage(){
         return;
     }
 
-    if(files.length>6){
-        alert("Please select up to 6 photos at a time.");
+    if(files.length>4){
+        alert("Please select up to 4 photos at a time.");
         return;
     }
 
@@ -1673,266 +1673,193 @@ def transcribe():
 @app.route("/image_edit", methods=["POST"])
 def image_edit():
     """
-    Alpha image editor.
+    Alpha image editor using Cloudflare Workers AI FLUX.2 Klein 4B.
 
-    Uses OpenRouter's dedicated Image API and Gemini 3.1 Flash Image
-    (Nano Banana 2).
-
-    Multiple uploaded photos are sent as reference images.
-    The model creates ONE final image from the references and prompt.
+    Cloudflare supports up to 4 reference images for this model.
+    Reference images are resized to fit Cloudflare's <512x512 input limit.
     """
 
-    api_key=os.environ.get(
-        "OPENROUTER_API_KEY"
-    )
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
 
-    if not api_key:
-
+    if not account_id or not api_token:
         return jsonify({
-            "error":
-            "OPENROUTER_API_KEY is not set in Render Environment Variables."
-        }),500
+            "error": (
+                "Cloudflare is not configured. Add CLOUDFLARE_ACCOUNT_ID "
+                "and CLOUDFLARE_API_TOKEN to Render Environment Variables."
+            )
+        }), 500
 
-    prompt=str(
-        request.form.get(
-            "prompt",
-            ""
-        )
-    ).strip()
-
-    images=[
-        f
-        for f in request.files.getlist("images")
+    prompt = str(request.form.get("prompt", "")).strip()
+    images = [
+        f for f in request.files.getlist("images")
         if f and f.filename
     ]
 
     if not prompt:
-
         return jsonify({
-            "error":
-            "Please describe the final image you want Alpha to create."
-        }),400
+            "error": "Please describe the final image you want Alpha to create."
+        }), 400
 
-    if len(images)>6:
-
+    # FLUX.2 Klein 4B supports a maximum of 4 reference images.
+    if len(images) > 4:
         return jsonify({
-            "error":
-            "Please select no more than 6 photos."
-        }),400
+            "error": "Cloudflare FLUX.2 supports up to 4 reference photos."
+        }), 400
 
-    if len(images)==0:
-
+    if not images:
         return jsonify({
-            "error":
-            "Please select at least one reference photo."
-        }),400
-
-    total_bytes=0
-
-    for image in images:
-
-        try:
-            total_bytes += int(
-                request.content_length or 0
-            )
-        except Exception:
-            pass
-
-        # Individual upload safety check.
-        # The browser already limits the total selection to 30 MB.
-        if image.content_length and image.content_length>10*1024*1024:
-
-            return jsonify({
-                "error":
-                "One of the selected photos is larger than 10 MB."
-            }),400
+            "error": "Please select at least one reference photo."
+        }), 400
 
     try:
+        multipart_files = {}
 
-        input_references=[]
-
-        for image in images:
-
-            image_bytes=image.read()
-
-            if not image_bytes:
+        for index, image in enumerate(images):
+            raw = image.read()
+            if not raw:
                 continue
 
-            mime_type=(
-                image.mimetype
-                or "image/jpeg"
+            # Cloudflare requires each reference image to be smaller than
+            # 512x512. Resize while preserving the original aspect ratio.
+            try:
+                source = Image.open(io.BytesIO(raw)).convert("RGB")
+                source.thumbnail((511, 511), Image.Resampling.LANCZOS)
+
+                output = io.BytesIO()
+                source.save(output, format="JPEG", quality=92, optimize=True)
+                image_bytes = output.getvalue()
+            except Exception as exc:
+                return jsonify({
+                    "error": f"Could not process reference photo {index + 1}: {exc}"
+                }), 400
+
+            multipart_files[f"input_image_{index}"] = (
+                f"reference_{index + 1}.jpg",
+                image_bytes,
+                "image/jpeg"
             )
 
-            allowed_types={
-                "image/jpeg",
-                "image/png",
-                "image/webp",
-                "image/heic",
-                "image/heif"
-            }
-
-            if mime_type not in allowed_types:
-                mime_type="image/jpeg"
-
-            encoded=base64.b64encode(
-                image_bytes
-            ).decode("utf-8")
-
-            data_url=(
-                f"data:{mime_type};base64,{encoded}"
-            )
-
-            input_references.append({
-                "type":"image_url",
-                "image_url":{
-                    "url":data_url
-                }
-            })
-
-        if not input_references:
-
+        if not multipart_files:
             return jsonify({
-                "error":
-                "The uploaded images could not be read."
-            }),400
+                "error": "The uploaded images could not be read."
+            }), 400
 
-        final_prompt=f"""
+        final_prompt = f"""
 Create ONE final photorealistic image using ALL supplied reference images.
 
 USER INSTRUCTION:
 {prompt}
 
 IMPORTANT:
-
 - Use all supplied reference images as visual references.
 - Follow the user's requested composition exactly.
 - If a reference provides a person's face, preserve that person's recognizable facial identity.
 - Do not unnecessarily change facial structure, eyes, eyebrows, nose, lips, jawline, complexion, skin texture, or natural proportions.
-- If a reference provides clothing, use it when the user requests it.
-- If a reference provides pose, background, lighting, camera angle, lens look, or photography style, use those elements when requested.
+- If a reference provides clothing, pose, background, lighting, camera angle, lens look, or photography style, use those elements when requested.
 - Combine the useful elements into ONE coherent photograph.
-- Keep the final result photorealistic and professionally photographed.
-- Preserve realistic skin texture, pores, natural asymmetry, shadows, highlights, perspective, and proportions.
+- Keep the result photorealistic and professionally photographed.
+- Preserve realistic skin texture, natural asymmetry, shadows, highlights, perspective, and proportions.
 - Avoid plastic-looking skin, excessive beauty filters, distorted faces, extra fingers, malformed hands, duplicate features, warped objects, halos, seams, or obvious compositing artifacts.
 - Do not create a collage.
 - Do not place the reference images side by side.
 - Do not output multiple images.
 - Produce ONE finished final image.
-"""
+""".strip()
 
-        result=requests.post(
-            OPENROUTER_IMAGE_URL,
+        form_data = {
+            "prompt": final_prompt,
+            "width": "1024",
+            "height": "1024"
+        }
+
+        url = (
+            "https://api.cloudflare.com/client/v4/accounts/"
+            f"{account_id}/ai/run/@cf/black-forest-labs/flux-2-klein-4b"
+        )
+
+        result = requests.post(
+            url,
             headers={
-                "Authorization":
-                f"Bearer {api_key}",
-                "Content-Type":
-                "application/json",
-                "HTTP-Referer":
-                request.host_url.rstrip("/"),
-                "X-Title":
-                "Project Alpha"
+                "Authorization": f"Bearer {api_token}"
             },
-            json={
-                "model":IMAGE_MODEL,
-                "prompt":final_prompt,
-                "input_references":input_references
-            },
+            data=form_data,
+            files=multipart_files,
             timeout=240
         )
 
         if not result.ok:
-
             try:
-
-                error_data=result.json()
-
-                error_message=(
-                    error_data
-                    .get("error",{})
-                    .get(
-                        "message",
-                        result.text
-                    )
-                )
-
+                error_data = result.json()
+                errors = error_data.get("errors") or []
+                messages = error_data.get("messages") or []
+                detail = (
+                    errors[0].get("message")
+                    if errors and isinstance(errors[0], dict)
+                    else None
+                ) or (
+                    messages[0].get("message")
+                    if messages and isinstance(messages[0], dict)
+                    else None
+                ) or result.text
             except Exception:
-
-                error_message=result.text
-
-            return jsonify({
-                "error":
-                f"OpenRouter image error ({result.status_code}): "
-                f"{error_message}"
-            }),502
-
-        result_data=result.json()
-
-        image_data=result_data.get(
-            "data",
-            []
-        )
-
-        if not image_data:
+                detail = result.text
 
             return jsonify({
-                "error":
-                "OpenRouter returned no image."
-            }),502
+                "error": f"Cloudflare image error ({result.status_code}): {detail}"
+            }), 502
 
-        first_image=image_data[0]
+        # Workers AI returns JSON containing result.image as base64 for this model.
+        content_type = result.headers.get("Content-Type", "")
+        b64_image = None
 
-        b64_image=first_image.get(
-            "b64_json"
-        )
+        if "application/json" in content_type:
+            result_data = result.json()
+            model_result = result_data.get("result") or {}
+            b64_image = model_result.get("image")
 
-        if not b64_image:
+            # Be tolerant of a future response wrapper.
+            if not b64_image:
+                b64_image = result_data.get("image")
 
-            return jsonify({
-                "error":
-                "OpenRouter returned an image response without image data."
-            }),502
+        if b64_image:
+            if b64_image.startswith("data:image/"):
+                image_url = b64_image
+            else:
+                image_url = f"data:image/jpeg;base64,{b64_image}"
+        else:
+            # Fallback in case the API returns the generated image as raw bytes.
+            raw_output = result.content
+            if not raw_output:
+                return jsonify({
+                    "error": "Cloudflare returned no generated image."
+                }), 502
 
-        media_type=first_image.get(
-            "media_type",
-            "image/png"
-        )
-
-        image_url=(
-            f"data:{media_type};base64,{b64_image}"
-        )
-
-        usage=result_data.get(
-            "usage",
-            {}
-        )
+            encoded = base64.b64encode(raw_output).decode("utf-8")
+            media_type = content_type.split(";")[0] or "image/jpeg"
+            image_url = f"data:{media_type};base64,{encoded}"
 
         return jsonify({
-            "success":True,
-            "image_url":image_url,
-            "model":IMAGE_MODEL,
-            "cost":usage.get("cost")
+            "success": True,
+            "image_url": image_url,
+            "model": "@cf/black-forest-labs/flux-2-klein-4b",
+            "reference_count": len(multipart_files)
         })
 
     except requests.Timeout:
-
         return jsonify({
-            "error":
-            "Image generation timed out. Please try again."
-        }),504
+            "error": "Image generation timed out. Please try again."
+        }), 504
 
-    except requests.RequestException as e:
-
+    except requests.RequestException as exc:
         return jsonify({
-            "error":
-            f"Could not contact OpenRouter: {str(e)}"
-        }),502
+            "error": f"Could not contact Cloudflare: {exc}"
+        }), 502
 
-    except Exception as e:
-
+    except Exception as exc:
         return jsonify({
-            "error":
-            f"Image generation failed: {str(e)}"
-        }),500
+            "error": f"Image generation failed: {exc}"
+        }), 500
 
 
 if __name__=="__main__":
