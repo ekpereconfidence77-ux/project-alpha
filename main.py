@@ -2335,185 +2335,213 @@ def transcribe():
 @login_required_api
 def image_edit():
     """
-    Dax image editor using Cloudflare Workers AI FLUX.2 Klein 4B.
+    Dax image editor.
 
-    Cloudflare supports up to 4 reference images for this model.
-    Reference images are resized to fit Cloudflare's <512x512 input limit.
+    Primary image model: Google Gemini 3.1 Flash Image (Nano Banana 2),
+    which is designed for conversational image editing and multiple
+    reference-image workflows. Cloudflare FLUX.2 Klein remains as a
+    fallback when GEMINI_API_KEY is not configured or Gemini is unavailable.
     """
 
+    prompt = str(request.form.get("prompt", "")).strip()
+    images = [f for f in request.files.getlist("images") if f and f.filename]
+
+    if not prompt:
+        return jsonify({"error": "Please describe the final image you want Dax to create."}), 400
+    if not images:
+        return jsonify({"error": "Please select at least one reference photo."}), 400
+    if len(images) > 4:
+        return jsonify({"error": "Dax supports up to 4 reference photos."}), 400
+
+    # Read and normalize the uploaded images once. Keep the original
+    # proportions and much more detail than the old 511x511 Cloudflare path.
+    image_parts = []
+    cloudflare_files = {}
+    try:
+        for index, upload in enumerate(images):
+            raw = upload.read()
+            if not raw:
+                continue
+            try:
+                source = Image.open(io.BytesIO(raw)).convert("RGB")
+                # Gemini can work from the original aspect ratio. Re-encode
+                # only to keep uploads reasonably sized while preserving detail.
+                output = io.BytesIO()
+                source.save(output, format="JPEG", quality=95, optimize=True)
+                image_bytes = output.getvalue()
+            except Exception as exc:
+                return jsonify({"error": f"Could not process photo {index + 1}: {exc}"}), 400
+
+            image_parts.append({
+                "type": "image",
+                "mime_type": "image/jpeg",
+                "data": base64.b64encode(image_bytes).decode("utf-8"),
+            })
+            cloudflare_files[f"input_image_{index}"] = (
+                f"reference_{index + 1}.jpg", image_bytes, "image/jpeg"
+            )
+    except Exception as exc:
+        return jsonify({"error": f"Could not read the uploaded photos: {exc}"}), 400
+
+    if not image_parts:
+        return jsonify({"error": "The uploaded images could not be read."}), 400
+
+    if len(image_parts) == 1:
+        edit_rules = """
+SINGLE-PHOTO EDIT:
+- This is ONE source photograph. Edit this photograph; do not combine it with anything else.
+- Preserve the person's identity, facial structure, skin tone, body proportions and recognizable features.
+- Preserve the original pose, framing, hairstyle, clothing and accessories unless the user explicitly asks to change them.
+- Change ONLY what the user's instruction requests.
+- Keep the result photographic and believable: real skin texture and pores, natural asymmetry, realistic hair, fabric, hands, shadows, reflections and depth of field.
+- Do NOT make it cartoon, anime, illustration, painting, CGI, plastic-looking, over-smoothed, or artificially beautified.
+- Do NOT invent a second person, duplicate the subject, make a collage, split the frame, or place the source beside the result.
+- Return ONE finished photograph.
+""".strip()
+    else:
+        edit_rules = """
+MULTI-PHOTO EDIT:
+- Use the reference photographs according to the user's instruction; do not automatically merge every element from every photo.
+- Identify which image is the main/base photograph and which images are references for identity, clothing, pose, object, background or style.
+- Preserve recognizable identity when a person/face reference is requested.
+- Return ONE coherent photograph, never a collage or side-by-side composition.
+- Keep realistic skin texture, natural proportions, hands, hair, fabric, lighting, shadows, perspective and depth of field.
+- Do NOT make it cartoon, anime, illustration, painting, CGI, plastic-looking, or over-smoothed.
+""".strip()
+
+    final_prompt = f"""
+You are Dax's professional photorealistic photo editor.
+Create the final image as if it were captured by a real professional camera, not drawn or illustrated.
+Use the supplied photograph(s) as visual references and follow the user's instruction precisely.
+
+USER INSTRUCTION:
+{prompt}
+
+{edit_rules}
+
+PHOTOREALISM STANDARD:
+- Photographic realism is mandatory.
+- Preserve natural facial identity and realistic anatomy.
+- Use physically plausible lighting, shadows, skin texture, lens depth of field and color.
+- Do not add creative changes that the user did not request.
+- The output must look like a genuine photograph, not an AI illustration.
+""".strip()
+
+    # ------------------------------------------------------------------
+    # PRIMARY: Gemini 3.1 Flash Image / Nano Banana 2
+    # ------------------------------------------------------------------
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        try:
+            gemini_input = [{"type": "text", "text": final_prompt}] + image_parts
+            payload = {
+                "model": "gemini-3.1-flash-image",
+                "input": gemini_input,
+                "response_format": {
+                    "type": "image",
+                    "mime_type": "image/jpeg",
+                    "image_size": "2K"
+                }
+            }
+
+            response = requests.post(
+                "https://generativelanguage.googleapis.com/v1beta/interactions",
+                headers={
+                    "x-goog-api-key": gemini_key,
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=300
+            )
+
+            if response.ok:
+                data = response.json()
+                b64_image = None
+                mime_type = "image/jpeg"
+
+                # Current Interactions API: steps[].content[].type == image
+                for step in data.get("steps", []) or []:
+                    for block in step.get("content", []) or []:
+                        if block.get("type") == "image" and block.get("data"):
+                            b64_image = block["data"]
+                            mime_type = block.get("mime_type") or mime_type
+                            break
+                    if b64_image:
+                        break
+
+                # Also tolerate the convenience-style output_image wrapper.
+                if not b64_image:
+                    out = data.get("output_image") or {}
+                    b64_image = out.get("data")
+                    mime_type = out.get("mime_type") or mime_type
+
+                if b64_image:
+                    return jsonify({
+                        "success": True,
+                        "image_url": f"data:{mime_type};base64,{b64_image}",
+                        "model": "gemini-3.1-flash-image",
+                        "reference_count": len(image_parts)
+                    })
+
+            # Don't expose a provider-specific failure if Cloudflare fallback works.
+            gemini_error = response.text[:500] if response is not None else "unknown error"
+        except requests.Timeout:
+            gemini_error = "Gemini image request timed out"
+        except requests.RequestException as exc:
+            gemini_error = str(exc)
+        except Exception as exc:
+            gemini_error = str(exc)
+    else:
+        gemini_error = "GEMINI_API_KEY is not configured"
+
+    # ------------------------------------------------------------------
+    # FALLBACK: Cloudflare FLUX.2 Klein 4B
+    # ------------------------------------------------------------------
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
-
     if not account_id or not api_token:
         return jsonify({
             "error": (
-                "Cloudflare is not configured. Add CLOUDFLARE_ACCOUNT_ID "
-                "and CLOUDFLARE_API_TOKEN to Render Environment Variables."
+                "The high-quality Gemini image editor is unavailable and Cloudflare is not configured. "
+                "Add GEMINI_API_KEY to Render, or keep CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN configured."
             )
         }), 500
 
-    prompt = str(request.form.get("prompt", "")).strip()
-    images = [
-        f for f in request.files.getlist("images")
-        if f and f.filename
-    ]
-
-    if not prompt:
-        return jsonify({
-            "error": "Please describe the final image you want Dax to create."
-        }), 400
-
-    # FLUX.2 Klein 4B supports a maximum of 4 reference images.
-    if len(images) > 4:
-        return jsonify({
-            "error": "Cloudflare FLUX.2 supports up to 4 reference photos."
-        }), 400
-
-    if not images:
-        return jsonify({
-            "error": "Please select at least one reference photo."
-        }), 400
-
     try:
-        multipart_files = {}
-
-        for index, image in enumerate(images):
-            raw = image.read()
-            if not raw:
-                continue
-
-            # Cloudflare requires each reference image to be smaller than
-            # 512x512. Resize while preserving the original aspect ratio.
-            try:
-                source = Image.open(io.BytesIO(raw)).convert("RGB")
-                source.thumbnail((511, 511), Image.Resampling.LANCZOS)
-
-                output = io.BytesIO()
-                source.save(output, format="JPEG", quality=92, optimize=True)
-                image_bytes = output.getvalue()
-            except Exception as exc:
-                return jsonify({
-                    "error": f"Could not process reference photo {index + 1}: {exc}"
-                }), 400
-
-            multipart_files[f"input_image_{index}"] = (
-                f"reference_{index + 1}.jpg",
-                image_bytes,
-                "image/jpeg"
-            )
-
-        if not multipart_files:
-            return jsonify({
-                "error": "The uploaded images could not be read."
-            }), 400
-
-        if len(multipart_files) == 1:
-            final_prompt = f"""
-Edit the single supplied reference photo into ONE finished photorealistic image.
-
-USER INSTRUCTION:
-{prompt}
-
-SINGLE-PHOTO EDITING RULES:
-- Treat the supplied image as the primary and only source image.
-- Do NOT combine it with any other image because there is only one reference.
-- Preserve the same person, identity, face, body, and recognizable features unless the user explicitly asks to change them.
-- Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.
-- Make ONLY the changes requested by the user; do not invent extra changes.
-- If the user asks for a face swap, use the supplied face/reference as the identity source and blend it naturally into the target image.
-- If the user asks to change clothing, pose, lighting, background, or photography style, change those requested elements while keeping everything else consistent.
-- Keep realistic skin texture, natural asymmetry, shadows, highlights, perspective, and camera characteristics.
-- Do not duplicate the subject, split the image, create a collage, or place the source beside the result.
-- Do not output multiple images.
-- Produce ONE coherent final photograph.
-""".strip()
-        else:
-            final_prompt = f"""
-Create ONE final photorealistic image using the supplied reference images.
-
-USER INSTRUCTION:
-{prompt}
-
-MULTI-PHOTO EDITING RULES:
-- There are multiple reference images, so combine only the visual elements that are relevant to the user's instruction.
-- Do NOT automatically blend every person, object, face, background, or feature from every reference.
-- Decide which reference supplies the subject, identity, clothing, pose, background, lighting, or style based on the user's instruction.
-- Preserve recognizable identity when a face reference is supplied.
-- Follow the user's requested composition exactly.
-- Keep the result as ONE coherent photorealistic photograph.
-- Do not create a collage or place reference images side by side.
-- Do not output multiple images.
-- Avoid duplicate people, duplicate faces, extra fingers, malformed hands, warped objects, halos, seams, or obvious compositing artifacts.
-""".strip()
-
-        form_data = {
-            "prompt": final_prompt,
-            "width": "1024",
-            "height": "1024"
-        }
-
+        form_data = {"prompt": final_prompt, "width": "1024", "height": "1024"}
         url = (
             "https://api.cloudflare.com/client/v4/accounts/"
             f"{account_id}/ai/run/@cf/black-forest-labs/flux-2-klein-4b"
         )
-
         result = requests.post(
             url,
-            headers={
-                "Authorization": f"Bearer {api_token}"
-            },
+            headers={"Authorization": f"Bearer {api_token}"},
             data=form_data,
-            files=multipart_files,
+            files=cloudflare_files,
             timeout=240
         )
-
         if not result.ok:
             try:
-                error_data = result.json()
-                errors = error_data.get("errors") or []
-                messages = error_data.get("messages") or []
-                detail = (
-                    errors[0].get("message")
-                    if errors and isinstance(errors[0], dict)
-                    else None
-                ) or (
-                    messages[0].get("message")
-                    if messages and isinstance(messages[0], dict)
-                    else None
-                ) or result.text
+                detail = result.json()
             except Exception:
                 detail = result.text
-
             return jsonify({
-                "error": f"Cloudflare image error ({result.status_code}): {detail}"
+                "error": f"Image providers failed. Gemini: {gemini_error}. Cloudflare: {detail}"
             }), 502
 
-        # Workers AI returns JSON containing result.image as base64 for this model.
         content_type = result.headers.get("Content-Type", "")
         b64_image = None
-
         if "application/json" in content_type:
             result_data = result.json()
             model_result = result_data.get("result") or {}
-            b64_image = model_result.get("image")
-
-            # Be tolerant of a future response wrapper.
-            if not b64_image:
-                b64_image = result_data.get("image")
+            b64_image = model_result.get("image") or result_data.get("image")
 
         if b64_image:
-            if b64_image.startswith("data:image/"):
-                image_url = b64_image
-            else:
-                image_url = f"data:image/jpeg;base64,{b64_image}"
+            image_url = b64_image if b64_image.startswith("data:image/") else f"data:image/jpeg;base64,{b64_image}"
         else:
-            # Fallback in case the API returns the generated image as raw bytes.
             raw_output = result.content
             if not raw_output:
-                return jsonify({
-                    "error": "Cloudflare returned no generated image."
-                }), 502
-
+                return jsonify({"error": "Cloudflare returned no generated image."}), 502
             encoded = base64.b64encode(raw_output).decode("utf-8")
             media_type = content_type.split(";")[0] or "image/jpeg"
             image_url = f"data:{media_type};base64,{encoded}"
@@ -2521,24 +2549,16 @@ MULTI-PHOTO EDITING RULES:
         return jsonify({
             "success": True,
             "image_url": image_url,
-            "model": "@cf/black-forest-labs/flux-2-klein-4b",
-            "reference_count": len(multipart_files)
+            "model": "@cf/black-forest-labs/flux-2-klein-4b-fallback",
+            "reference_count": len(cloudflare_files)
         })
 
     except requests.Timeout:
-        return jsonify({
-            "error": "Image generation timed out. Please try again."
-        }), 504
-
+        return jsonify({"error": "Image generation timed out. Please try again."}), 504
     except requests.RequestException as exc:
-        return jsonify({
-            "error": f"Could not contact Cloudflare: {exc}"
-        }), 502
-
+        return jsonify({"error": f"Could not contact image providers: {exc}"}), 502
     except Exception as exc:
-        return jsonify({
-            "error": f"Image generation failed: {exc}"
-        }), 500
+        return jsonify({"error": f"Image generation failed: {exc}"}), 500
 
 
 if __name__=="__main__":
