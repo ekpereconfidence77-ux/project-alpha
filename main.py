@@ -207,13 +207,15 @@ body{
 
 #newChat{
     width:100%;
-    padding:12px;
-    border:0;
-    border-radius:10px;
-    background:#2b6cff;
+    height:46px;
+    padding:0 14px;
+    border:1px solid #343b46;
+    border-radius:12px;
+    background:#222832;
     color:#fff;
     font-size:15px;
-    margin-bottom:12px
+    margin-bottom:12px;
+    flex:0 0 auto
 }
 
 #history{
@@ -245,39 +247,89 @@ body{
 }
 
 header{
-    padding:16px 18px;
+    padding:10px 14px;
     background:#181d25;
     border-bottom:1px solid #2a303a;
-    font-size:20px;
-    font-weight:700
+    font-size:17px;
+    font-weight:700;
+    display:flex;
+    align-items:center;
+    min-height:58px
 }
 
 #chat{
     flex:1;
     overflow-y:auto;
-    padding:18px;
+    padding:24px 18px 150px;
     display:flex;
     flex-direction:column;
-    gap:12px
+    gap:2px;
+    scroll-behavior:smooth
 }
 
 .message{
-    max-width:85%;
-    padding:12px 14px;
-    border-radius:16px;
-    line-height:1.45;
+    width:100%;
+    max-width:820px;
+    margin:0 auto;
+    padding:13px 8px;
+    line-height:1.55;
     white-space:pre-wrap;
-    word-wrap:break-word
+    word-wrap:break-word;
+    font-size:16px
 }
 
 .user{
-    align-self:flex-end;
-    background:#2b6cff
+    align-self:center;
+    background:transparent;
+    display:flex;
+    justify-content:flex-end
+}
+
+.user::before{
+    content:"You";
+    display:none
+}
+
+.user{
+    text-align:right
+}
+
+.user{
+    color:#fff
 }
 
 .alpha{
-    align-self:flex-start;
-    background:#242a33
+    align-self:center;
+    background:transparent;
+    color:#f2f4f7
+}
+
+.user, .alpha{
+    border-radius:12px
+}
+
+.typing{
+    display:flex;
+    align-items:center;
+    gap:5px;
+    color:#9aa3af;
+    padding:12px 8px
+}
+
+.typing span{
+    width:7px;
+    height:7px;
+    border-radius:50%;
+    background:#9aa3af;
+    animation:typing 1.2s infinite ease-in-out
+}
+
+.typing span:nth-child(2){animation-delay:.15s}
+.typing span:nth-child(3){animation-delay:.3s}
+
+@keyframes typing{
+    0%,60%,100%{transform:translateY(0);opacity:.35}
+    30%{transform:translateY(-4px);opacity:1}
 }
 
 .status{
@@ -291,31 +343,50 @@ header{
 .composer{
     display:flex;
     gap:8px;
-    padding:10px;
-    background:#181d25;
-    border-top:1px solid #2a303a
+    padding:10px max(10px, calc((100vw - 860px)/2));
+    background:#11151b;
+    border-top:0;
+    position:sticky;
+    bottom:0;
+    z-index:20
 }
 
-input{
+input, textarea{
     flex:1;
     min-width:0;
     border:1px solid #343b46;
     background:#222832;
     color:#fff;
-    border-radius:12px;
-    padding:13px 14px;
+    border-radius:22px;
+    padding:12px 16px;
     outline:none;
-    font-size:16px
+    font-size:16px;
+    font-family:inherit
+}
+
+#message{
+    resize:none;
+    min-height:46px;
+    max-height:150px;
+    line-height:1.4;
+    overflow-y:auto
+}
+
+input:focus, textarea:focus{
+    border-color:#596273;
+    box-shadow:0 0 0 1px rgba(255,255,255,.04)
 }
 
 button{
     border:none;
-    border-radius:12px;
+    border-radius:50%;
     color:#fff;
     font-size:18px;
-    min-width:48px;
-    padding:0 14px;
-    cursor:pointer
+    width:46px;
+    height:46px;
+    padding:0;
+    cursor:pointer;
+    flex:0 0 46px
 }
 
 #micButton{
@@ -328,7 +399,21 @@ button{
 }
 
 #sendButton{
-    background:#2b6cff
+    background:#fff;
+    color:#11151b;
+}
+
+#imageButton, #micButton{
+    background:#2b3039;
+}
+
+#imageButton, #micButton, #sendButton{
+    align-self:flex-end
+}
+
+#sendButton.stop{
+    background:#fff;
+    color:#11151b;
 }
 
 button:disabled{
@@ -338,14 +423,18 @@ button:disabled{
 
 #imagePanel{
     display:none;
-    padding:10px;
+    padding:12px;
     background:#181d25;
-    border-top:1px solid #2a303a
+    border-top:1px solid #2a303a;
+    max-width:860px;
+    width:100%;
+    margin:0 auto
 }
 
 #imageFile{
     width:100%;
-    margin-bottom:8px
+    margin-bottom:8px;
+    color:#cdd3dc
 }
 
 #imagePreview{
@@ -357,13 +446,16 @@ button:disabled{
 
 #imagePrompt{
     width:100%;
-    margin-bottom:8px
+    margin-bottom:8px;
+    border-radius:12px
 }
 
 #editButton{
     background:#7b3cff;
     width:100%;
-    padding:12px
+    height:46px;
+    border-radius:12px;
+    padding:0 12px
 }
 
 .image-result{
@@ -406,6 +498,12 @@ button:disabled{
 
 #closeHistory{
     display:none;
+    width:100%;
+    height:42px;
+    border-radius:10px;
+    flex:0 0 auto;
+    margin-bottom:8px;
+    background:#303641
 }
 
 @media(max-width:700px){
@@ -445,7 +543,11 @@ button:disabled{
         display:block;
     }
 
-    .message{max-width:92%}
+    .message{max-width:100%;padding-left:4px;padding-right:4px}
+    #chat{padding:18px 10px 145px}
+    .composer{padding:8px 8px 10px}
+    #message{font-size:16px}
+    #imageButton,#micButton,#sendButton{width:44px;height:44px;flex-basis:44px}
 }
 </style>
 </head>
@@ -480,7 +582,7 @@ button:disabled{
     <div id="imagePreview"></div>
 
     <div style="font-size:13px;opacity:.75;margin:6px 0">
-        Select several photos to use together as references for ONE final image.
+        Add photos only when you want Alpha to use them for this image request. They are cleared automatically after a successful edit.
     </div>
 
     <div
@@ -520,11 +622,13 @@ button:disabled{
         🎤
     </button>
 
-    <input
+    <textarea
         id="message"
-        placeholder="Talk to Alpha..."
+        rows="1"
+        placeholder="Message Alpha..."
         autocomplete="off"
-    >
+        enterkeyhint="send"
+    ></textarea>
 
     <button
         id="sendButton"
@@ -559,9 +663,72 @@ function setStatus(t){
 function addMessage(text,who){
     const div=document.createElement("div");
     div.className="message "+who;
-    div.textContent=text;
+
+    if(who==="user"){
+        const bubble=document.createElement("div");
+        bubble.textContent=text;
+        bubble.style.display="inline-block";
+        bubble.style.maxWidth="85%";
+        bubble.style.background="#2f6fed";
+        bubble.style.padding="10px 14px";
+        bubble.style.borderRadius="18px 18px 5px 18px";
+        bubble.style.textAlign="left";
+        div.appendChild(bubble);
+    }else{
+        const label=document.createElement("div");
+        label.textContent="🤖 Alpha";
+        label.style.fontWeight="700";
+        label.style.fontSize="13px";
+        label.style.marginBottom="4px";
+        label.style.opacity=".9";
+        div.appendChild(label);
+
+        const body=document.createElement("div");
+        body.textContent=text;
+        div.appendChild(body);
+
+        const actions=document.createElement("div");
+        actions.style.marginTop="7px";
+        actions.style.display="flex";
+        actions.style.gap="6px";
+
+        const readButton=document.createElement("button");
+        readButton.type="button";
+        readButton.textContent="🔊 Read aloud";
+        readButton.title="Read this message aloud";
+        readButton.style.border="0";
+        readButton.style.background="transparent";
+        readButton.style.cursor="pointer";
+        readButton.style.padding="4px 0";
+        readButton.style.fontSize="12px";
+        readButton.style.opacity=".7";
+        readButton.onclick=()=>speak(text);
+        actions.appendChild(readButton);
+
+        div.appendChild(actions);
+    }
+
     chat.appendChild(div);
     chat.scrollTop=chat.scrollHeight;
+}
+
+function showTyping(){
+    removeTyping();
+    const div=document.createElement("div");
+    div.id="typingIndicator";
+    div.className="message alpha typing";
+    div.innerHTML="<span></span><span></span><span></span>";
+    chat.appendChild(div);
+    chat.scrollTop=chat.scrollHeight;
+}
+
+function removeTyping(){
+    document.getElementById("typingIndicator")?.remove();
+}
+
+function autoResize(){
+    messageInput.style.height="auto";
+    messageInput.style.height=Math.min(messageInput.scrollHeight,150)+"px";
 }
 
 function speak(text){
@@ -612,6 +779,7 @@ async function loadHistory(){
 async function openChat(id){
     currentChatId=id;
     closeHistory();
+    clearImageComposer();
     chat.innerHTML="";
 
     setStatus("Loading chat...");
@@ -624,12 +792,21 @@ async function openChat(id){
             throw new Error(d.error||"Could not load chat.");
         }
 
-        (d.messages||[]).forEach(m=>{
+        const savedMessages=d.messages||[];
+
+        savedMessages.forEach(m=>{
             addMessage(
                 m.content,
                 m.role==="user"?"user":"alpha"
             );
         });
+
+        if(savedMessages.length===0){
+            addMessage(
+                "Hello 👋 I’m Alpha. How can I help you today?",
+                "alpha"
+            );
+        }
 
         setStatus("");
 
@@ -642,6 +819,7 @@ async function openChat(id){
 
 async function newChat(){
     closeHistory();
+    clearImageComposer();
     try{
         const r=await fetch("/new_chat",{
             method:"POST"
@@ -653,7 +831,7 @@ async function newChat(){
         chat.innerHTML="";
 
         addMessage(
-            "Hello 👋 I'm Alpha. Ask me anything, or tap 🎤 and talk to me.",
+            "Hello 👋 I’m Alpha. How can I help you today?",
             "alpha"
         );
 
@@ -678,8 +856,10 @@ async function sendMessage(textFromVoice=null){
 
     messageInput.value="";
 
-    setStatus("Alpha is thinking...");
+    setStatus("");
     sendButton.disabled=true;
+    messageInput.disabled=true;
+    showTyping();
 
     try{
 
@@ -715,16 +895,18 @@ async function sendMessage(textFromVoice=null){
 
         currentChatId=data.conversation_id;
 
+        removeTyping();
         addMessage(data.reply,"alpha");
 
-        speak(data.reply);
-
+        // Alpha does NOT read replies automatically.
+        // Use the "🔊 Read aloud" button on a reply when requested.
         setStatus("");
 
         await loadHistory();
 
     }catch(e){
 
+        removeTyping();
         addMessage(
             "Sorry, something went wrong: "+e.message,
             "alpha"
@@ -735,6 +917,8 @@ async function sendMessage(textFromVoice=null){
     }finally{
 
         sendButton.disabled=false;
+        messageInput.disabled=false;
+        autoResize();
         messageInput.focus();
     }
 }
@@ -842,11 +1026,15 @@ async function editImage(){
                 d.image_url,
                 "🎨 Final image"
             );
+
+            // Behave like a normal chat attachment composer: once the
+            // image has been successfully created, the source photos are
+            // no longer kept selected in the composer. The final result
+            // remains in the conversation view.
+            clearImageComposer();
         }
 
-        setStatus(
-            "✅ One final image created from your references."
-        );
+        setStatus("");
 
     }catch(e){
 
@@ -859,6 +1047,40 @@ async function editImage(){
     }finally{
 
         button.disabled=false;
+    }
+}
+
+
+function clearImageComposer(){
+
+    const fileInput=document.getElementById("imageFile");
+    const preview=document.getElementById("imagePreview");
+    const count=document.getElementById("imageCount");
+    const prompt=document.getElementById("imagePrompt");
+    const panel=document.getElementById("imagePanel");
+
+    // Clear the browser file selection so the source photos are not
+    // carried into the next image request.
+    if(fileInput){
+        fileInput.value="";
+    }
+
+    if(preview){
+        preview.innerHTML="";
+    }
+
+    if(count){
+        count.textContent="No photos selected";
+    }
+
+    if(prompt){
+        prompt.value="";
+    }
+
+    // Close the image composer after a successful edit, like a normal
+    // chat attachment workflow.
+    if(panel){
+        panel.style.display="none";
     }
 }
 
@@ -1177,12 +1399,20 @@ async function transcribeAudio(blob){
 messageInput.addEventListener(
     "keydown",
     e=>{
-        if(e.key==="Enter"){
+        if(e.key==="Enter" && !e.shiftKey){
             e.preventDefault();
-            sendMessage();
+            if(!sendButton.disabled){
+                sendMessage();
+            }
         }
     }
 );
+
+messageInput.addEventListener("input",autoResize);
+
+messageInput.addEventListener("paste",()=>{
+    setTimeout(autoResize,0);
+});
 
 
 (async()=>{
