@@ -166,9 +166,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
 <div id="status" class="status"></div>
 
 <div id="imagePanel" style="display:none;padding:10px;background:#181d25;border-top:1px solid #2a303a">
-  <input id="imageFile" type="file" accept="image/*" style="width:100%;margin-bottom:8px">
-  <input id="imagePrompt" placeholder="Tell Alpha how to edit this picture..." style="width:100%;margin-bottom:8px">
-  <button id="editButton" onclick="editImage()" style="background:#7b3cff;width:100%;padding:12px">🎨 Edit / Generate Image</button>
+  <input id="imageFile" type="file" accept="image/*" multiple style="width:100%;margin-bottom:8px">
+  <div id="imagePreview" style="display:flex;gap:8px;overflow-x:auto;margin-bottom:8px"></div>
+  <div style="font-size:13px;opacity:.75;margin:6px 0">Select several photos to use together as references for ONE final image.</div>
+  <div id="imageCount" style="font-size:13px;opacity:.8;margin-bottom:8px">No photos selected</div>
+  <input id="imagePrompt" placeholder="Tell Alpha how to edit the selected photos..." style="width:100%;margin-bottom:8px">
+  <button id="editButton" onclick="editImage()" style="background:#7b3cff;width:100%;padding:12px">🎨 Edit Selected Photos</button>
 </div>
 
 <div class="composer">
@@ -274,30 +277,49 @@ function toggleImagePanel(){
 }
 
 async function editImage(){
- const file=document.getElementById("imageFile").files[0];
+ const files=Array.from(document.getElementById("imageFile").files||[]);
  const prompt=document.getElementById("imagePrompt").value.trim();
 
+ if(!files.length && !prompt){
+   alert("Select one or more photos, or enter a prompt to generate an image.");
+   return;
+ }
+ if(files.length>6){
+   alert("Please select up to 6 photos at a time.");
+   return;
+ }
  if(!prompt){
-   alert("Tell Alpha what you want it to do with the image.");
+   alert("Tell Alpha what you want it to do with the selected photos.");
    return;
  }
 
- setStatus(file ? "🎨 Editing your image..." : "🎨 Generating image...");
+ const totalBytes=files.reduce((sum,f)=>sum+f.size,0);
+ if(totalBytes>30*1024*1024){
+   alert("The selected photos are too large together. Please keep the total under 30 MB.");
+   return;
+ }
+
+ setStatus(files.length ? `🎨 Combining ${files.length} reference photos into one image...` : "🎨 Generating your image...");
  const button=document.getElementById("editButton");
  button.disabled=true;
 
  try{
    const fd=new FormData();
    fd.append("prompt",prompt);
-   if(file) fd.append("image",file);
+   files.forEach(file=>fd.append("images",file));
 
    const r=await fetch("/image_edit",{method:"POST",body:fd});
-   const d=await r.json();
-   if(!r.ok) throw new Error(d.error||"Image operation failed.");
+   const raw=await r.text();
+   let d;
+   try{d=JSON.parse(raw);}
+   catch(e){throw new Error("Alpha server returned HTML instead of JSON (HTTP "+r.status+"). Render may still be deploying the new code. Refresh and try again.");}
+   if(!r.ok)throw new Error(d.error||"Image operation failed.");
 
-   addImageMessage(d.image_url);
-   setStatus("✅ Image ready.");
-   document.getElementById("imagePanel").style.display="none";
+   if(d.image_url){
+     addImageMessage(d.image_url,"🎨 Final image");
+   }
+
+   setStatus("✅ One final image created from your references.");
  }catch(e){
    alert("Image error: "+e.message);
    setStatus("");
@@ -306,14 +328,40 @@ async function editImage(){
  }
 }
 
-function addImageMessage(url){
+function updateImagePreview(){
+ const files=Array.from(document.getElementById("imageFile").files||[]);
+ const preview=document.getElementById("imagePreview");
+ const count=document.getElementById("imageCount");
+ preview.innerHTML="";
+ count.textContent=files.length ? `${files.length} photo${files.length===1?"":"s"} selected` : "No photos selected";
+ files.forEach(file=>{
+   const wrap=document.createElement("div");
+   wrap.style.minWidth="76px";
+   const img=document.createElement("img");
+   img.src=URL.createObjectURL(file);
+   img.style.width="72px";
+   img.style.height="72px";
+   img.style.objectFit="cover";
+   img.style.borderRadius="8px";
+   wrap.appendChild(img);
+   preview.appendChild(wrap);
+ });
+}
+
+document.getElementById("imageFile").addEventListener("change",updateImagePreview);
+
+function addImageMessage(url,label="🎨 Image"){
  const div=document.createElement("div");
  div.className="message alpha";
+ const title=document.createElement("div");
+ title.textContent=label;
+ title.style.marginBottom="6px";
  const img=document.createElement("img");
  img.src=url;
  img.style.maxWidth="100%";
  img.style.borderRadius="12px";
  img.style.display="block";
+ div.appendChild(title);
  div.appendChild(img);
  chat.appendChild(div);
  chat.scrollTop=chat.scrollHeight;
@@ -509,52 +557,111 @@ def transcribe():
 
 @app.route("/image_edit", methods=["POST"])
 def image_edit():
+    """Create ONE final image using multiple uploaded photos as visual references.
+
+    Hugging Face's high-level image_to_image helper accepts one input image, so this
+    endpoint builds a clean reference board from the selected photos and sends that
+    board to FLUX.2 with instructions to use all references. This keeps the whole
+    workflow on the existing HF_TOKEN setup without requiring another provider key.
+    """
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
         return jsonify({"error": "HF_TOKEN is not set. Add your Hugging Face token in Render Environment Variables."}), 500
 
     prompt = str(request.form.get("prompt", "")).strip()
-    image = request.files.get("image")
+    images = [f for f in request.files.getlist("images") if f and f.filename]
 
     if not prompt:
-        return jsonify({"error": "Please describe what you want the image to do."}), 400
+        return jsonify({"error": "Please describe the final image you want Alpha to create."}), 400
+
+    if len(images) > 6:
+        return jsonify({"error": "Please select no more than 6 reference photos at a time."}), 400
 
     try:
         from huggingface_hub import InferenceClient
+        from PIL import Image, ImageOps, ImageDraw
+        import io, base64, math
 
         client = InferenceClient(
-            provider="fal-ai",
+            provider="auto",
             api_key=hf_token,
         )
 
-        if image:
-            raw = image.read()
-            if not raw:
-                return jsonify({"error": "The image file was empty."}), 400
-
-            if len(raw) > 10 * 1024 * 1024:
-                return jsonify({"error": "Please use an image smaller than 10 MB."}), 400
-
-            # Hugging Face image-to-image editing.
-            output = client.image_to_image(
-                raw,
+        # No photos: allow pure text-to-image generation.
+        if not images:
+            output = client.text_to_image(
                 prompt=prompt,
                 model="black-forest-labs/FLUX.2-dev",
             )
-        else:
-            # Hugging Face text-to-image generation.
-            output = client.text_to_image(
-                prompt=prompt,
-                model="black-forest-labs/FLUX.1-Krea-dev",
-            )
+            buffer = io.BytesIO()
+            output.save(buffer, format="PNG")
+            encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            return jsonify({"image_url": f"data:image/png;base64,{encoded}"})
 
-        import io, base64
+        # Read and validate the reference photos.
+        pil_images = []
+        total_bytes = 0
+        for image in images:
+            raw = image.read()
+            total_bytes += len(raw)
+            if not raw:
+                return jsonify({"error": f"The image file '{image.filename}' was empty."}), 400
+            if len(raw) > 10 * 1024 * 1024:
+                return jsonify({"error": f"'{image.filename}' is larger than 10 MB."}), 400
+            if total_bytes > 30 * 1024 * 1024:
+                return jsonify({"error": "The selected photos are too large together. Keep the total under 30 MB."}), 400
+
+            try:
+                im = Image.open(io.BytesIO(raw)).convert("RGB")
+                pil_images.append(im)
+            except Exception:
+                return jsonify({"error": f"'{image.filename}' is not a valid image file."}), 400
+
+        # Build a 2-column reference board. Each tile is labeled so the model can
+        # distinguish reference 1, 2, etc. without needing separate API inputs.
+        tile_w, tile_h = 768, 768
+        cols = 2
+        rows = math.ceil(len(pil_images) / cols)
+        header_h = 70
+        board = Image.new("RGB", (cols * tile_w, rows * (tile_h + header_h)), "white")
+        draw = ImageDraw.Draw(board)
+
+        for idx, im in enumerate(pil_images, start=1):
+            x = ((idx - 1) % cols) * tile_w
+            y = ((idx - 1) // cols) * (tile_h + header_h)
+            tile = ImageOps.fit(im, (tile_w, tile_h), method=Image.Resampling.LANCZOS)
+            board.paste(tile, (x, y + header_h))
+            draw.rectangle([x, y, x + tile_w, y + header_h], fill="white")
+            draw.text((x + 20, y + 20), f"REFERENCE {idx}", fill="black")
+
+        board_buffer = io.BytesIO()
+        board.save(board_buffer, format="JPEG", quality=90, optimize=True)
+        board_bytes = board_buffer.getvalue()
+
+        reference_instruction = (
+            "You are given a reference board containing multiple source photos. "
+            "Use ALL reference photos as visual references for the SINGLE final image. "
+            "Follow the user's requested transformation exactly. Preserve important identity, "
+            "facial characteristics, clothing details, objects, colors, pose, or style from the "
+            "relevant reference photos when the prompt asks for them. Do not simply reproduce the "
+            "collage or the labels. Create one coherent photorealistic final image.\n\n"
+            f"USER REQUEST: {prompt}"
+        )
+
+        output = client.image_to_image(
+            board_bytes,
+            prompt=reference_instruction,
+            model="black-forest-labs/FLUX.2-dev",
+        )
+
         buffer = io.BytesIO()
         output.save(buffer, format="PNG")
         encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
         return jsonify({
-            "image_url": f"data:image/png;base64,{encoded}"
+            "image_url": f"data:image/png;base64,{encoded}",
+            "reference_count": len(images),
+            "note": "One final image was created using all selected reference photos."
         })
 
     except Exception as e:
