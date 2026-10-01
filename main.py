@@ -14,7 +14,7 @@ DB_FILE = "alpha_memory.db"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-CHAT_MODEL = "openai/gpt-5.6-luna"
+CHAT_MODEL = "openrouter/free"
 
 
 def init_db():
@@ -388,8 +388,63 @@ button:disabled{
     100%{transform:scale(1)}
 }
 
+#historyToggle{
+    display:none;
+    background:#303641;
+    margin-right:8px;
+    min-width:44px;
+    padding:8px 12px;
+}
+
+#historyOverlay{
+    display:none;
+    position:fixed;
+    inset:0;
+    z-index:999;
+    background:rgba(0,0,0,.45);
+}
+
+#closeHistory{
+    display:none;
+}
+
 @media(max-width:700px){
-    #sidebar{display:none}
+    #closeHistory{
+        display:block;
+        width:100%;
+        margin-bottom:8px;
+        background:#303641;
+        padding:10px;
+    }
+}
+
+@media(max-width:700px){
+    #sidebar{
+        display:block;
+        position:fixed;
+        left:0;
+        top:0;
+        bottom:0;
+        width:280px;
+        max-width:82vw;
+        z-index:1000;
+        transform:translateX(-105%);
+        transition:transform .2s ease;
+        box-shadow:8px 0 30px rgba(0,0,0,.35);
+    }
+
+    body.history-open #sidebar{
+        transform:translateX(0);
+    }
+
+    body.history-open #historyOverlay{
+        display:block;
+    }
+
+    #historyToggle{
+        display:block;
+    }
+
     .message{max-width:92%}
 }
 </style>
@@ -398,13 +453,16 @@ button:disabled{
 <body>
 
 <aside id="sidebar">
+    <button id="closeHistory" onclick="closeHistory()">✕ Close history</button>
     <button id="newChat" onclick="newChat()">＋ New chat</button>
     <div id="history"></div>
 </aside>
 
+<div id="historyOverlay" onclick="closeHistory()"></div>
+
 <section id="main">
 
-<header>🤖 Project Alpha</header>
+<header><button id="historyToggle" onclick="toggleHistory()">☰</button>🤖 Project Alpha</header>
 
 <div id="chat"></div>
 
@@ -519,6 +577,14 @@ function speak(text){
     speechSynthesis.speak(u);
 }
 
+function toggleHistory(){
+    document.body.classList.toggle("history-open");
+}
+
+function closeHistory(){
+    document.body.classList.remove("history-open");
+}
+
 async function loadHistory(){
     try{
         const r=await fetch("/history");
@@ -545,6 +611,7 @@ async function loadHistory(){
 
 async function openChat(id){
     currentChatId=id;
+    closeHistory();
     chat.innerHTML="";
 
     setStatus("Loading chat...");
@@ -574,6 +641,7 @@ async function openChat(id){
 }
 
 async function newChat(){
+    closeHistory();
     try{
         const r=await fetch("/new_chat",{
             method:"POST"
@@ -1427,7 +1495,10 @@ Keep answers reasonably concise unless the user asks for detail.
             json={
                 "model":CHAT_MODEL,
                 "messages":messages,
-                "temperature":0.7
+                "temperature":0.7,
+                # Prevent OpenRouter from reserving an unnecessarily large
+                # output budget (the previous request could default to 65,536).
+                "max_tokens":8192
             },
             timeout=120
         )
