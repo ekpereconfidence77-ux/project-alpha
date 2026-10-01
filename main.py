@@ -509,9 +509,9 @@ def transcribe():
 
 @app.route("/image_edit", methods=["POST"])
 def image_edit():
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-    if not openrouter_key:
-        return jsonify({"error": "OPENROUTER_API_KEY is not set."}), 500
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+        return jsonify({"error": "HF_TOKEN is not set. Add your Hugging Face token in Render Environment Variables."}), 500
 
     prompt = str(request.form.get("prompt", "")).strip()
     image = request.files.get("image")
@@ -520,69 +520,46 @@ def image_edit():
         return jsonify({"error": "Please describe what you want the image to do."}), 400
 
     try:
-        body = {
-            "model": "google/gemini-3.1-flash-image",
-            "prompt": prompt
-        }
+        from huggingface_hub import InferenceClient
+
+        client = InferenceClient(
+            provider="fal-ai",
+            api_key=hf_token,
+        )
 
         if image:
             raw = image.read()
             if not raw:
                 return jsonify({"error": "The image file was empty."}), 400
 
-            if len(raw) > 8 * 1024 * 1024:
-                return jsonify({"error": "Please use an image smaller than 8 MB."}), 400
+            if len(raw) > 10 * 1024 * 1024:
+                return jsonify({"error": "Please use an image smaller than 10 MB."}), 400
 
-            import base64
-            content_type = image.mimetype or "image/jpeg"
-            encoded = base64.b64encode(raw).decode("utf-8")
+            # Hugging Face image-to-image editing.
+            output = client.image_to_image(
+                raw,
+                prompt=prompt,
+                model="black-forest-labs/FLUX.2-dev",
+            )
+        else:
+            # Hugging Face text-to-image generation.
+            output = client.text_to_image(
+                prompt=prompt,
+                model="black-forest-labs/FLUX.1-Krea-dev",
+            )
 
-            body["input_references"] = [{
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{content_type};base64,{encoded}"
-                }
-            }]
-
-        result = requests.post(
-            "https://openrouter.ai/api/v1/images",
-            headers={
-                "Authorization": f"Bearer {openrouter_key}",
-                "Content-Type": "application/json"
-            },
-            json=body,
-            timeout=180
-        )
-
-        if not result.ok:
-            try:
-                err = result.json()
-                detail = err.get("error", {}).get("message", result.text)
-            except Exception:
-                detail = result.text[:1000]
-
-            return jsonify({
-                "error": f"Image API error (HTTP {result.status_code}): {detail}"
-            }), 502
-
-        result_data = result.json()
-        images = result_data.get("data") or []
-
-        if not images or not images[0].get("b64_json"):
-            return jsonify({"error": "The image service returned no image."}), 502
-
-        media_type = images[0].get("media_type") or "image/png"
-        image_url = f"data:{media_type};base64,{images[0]['b64_json']}"
+        import io, base64
+        buffer = io.BytesIO()
+        output.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
         return jsonify({
-            "image_url": image_url,
-            "cost": (result_data.get("usage") or {}).get("cost")
+            "image_url": f"data:image/png;base64,{encoded}"
         })
 
-    except requests.Timeout:
-        return jsonify({"error": "Image generation timed out. Please try again."}), 504
     except Exception as e:
-        return jsonify({"error": f"Image operation failed: {str(e)}"}), 500
+        detail = str(e)
+        return jsonify({"error": f"Hugging Face image error: {detail}"}), 502
 
 @app.route("/chat", methods=["POST"])
 def chat():
