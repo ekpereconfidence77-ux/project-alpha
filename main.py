@@ -24,7 +24,8 @@ GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
 
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn.execute("PRAGMA busy_timeout=30000")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +68,7 @@ def init_db():
 
 
 def get_memories(user_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     rows = conn.execute(
         "SELECT memory FROM memories WHERE user_id = ? ORDER BY id ASC",
@@ -79,7 +80,7 @@ def get_memories(user_id):
 
 
 def save_memory(user_id, memory):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     conn.execute(
         "INSERT INTO memories (user_id, memory) VALUES (?, ?)",
@@ -91,7 +92,7 @@ def save_memory(user_id, memory):
 
 
 def create_conversation(user_id, title="New chat"):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     cur = conn.execute(
         "INSERT INTO conversations (user_id, title) VALUES (?, ?)",
@@ -107,7 +108,7 @@ def create_conversation(user_id, title="New chat"):
 
 
 def get_conversations(user_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     rows = conn.execute(
         """
@@ -124,7 +125,7 @@ def get_conversations(user_id):
 
 
 def get_messages(conversation_id, user_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     rows = conn.execute(
         """
@@ -142,7 +143,7 @@ def get_messages(conversation_id, user_id):
 
 
 def save_message(conversation_id, role, content):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     conn.execute(
         """
@@ -157,7 +158,7 @@ def save_message(conversation_id, role, content):
 
 
 def rename_conversation(conversation_id, user_id, title):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     conn.execute(
         """
@@ -173,7 +174,7 @@ def rename_conversation(conversation_id, user_id, title):
 
 
 def conversation_belongs_to_user(conversation_id, user_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
 
     row = conn.execute(
         """
@@ -1230,9 +1231,8 @@ async function editImage(){
     }
 
     setStatus(
-        files.length === 1
-            ? "🎨 Editing your photo..."
-            : `🎨 Combining ${files.length} reference photos into one image...`
+        `🎨 Dax is editing ${files.length} photo`+
+        `${files.length===1?"":"s"} with FLUX.2 Klein 9B...`
     );
 
     const button=document.getElementById("editButton");
@@ -1693,6 +1693,16 @@ messageInput.addEventListener("paste",()=>{
 """
 
 
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    if request.path.startswith(("/chat", "/image_edit", "/transcribe", "/history", "/current_chat", "/new_chat")):
+        app.logger.exception("Unhandled Dax API error")
+        return jsonify({
+            "error": f"Dax server error: {str(exc)}"
+        }), 500
+    raise exc
+
 @app.route("/")
 @login_required_page
 def home():
@@ -1722,7 +1732,7 @@ def login():
     if not password:
         return jsonify({"error": "Enter your password."}), 400
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
     conn.close()
     if not row or not check_password_hash(row[1], password):
@@ -1744,7 +1754,7 @@ def register():
         return jsonify({"error": "Password must be at least 8 characters."}), 400
 
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(DB_FILE, timeout=30)
         cur = conn.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
         user_id = cur.lastrowid
         conn.commit()
@@ -1760,7 +1770,7 @@ def register():
 @app.route("/me")
 @login_required_api
 def me():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     row = conn.execute("SELECT email FROM users WHERE id = ?", (get_current_user_id(),)).fetchone()
     conn.close()
     return jsonify({"email": row[0] if row else ""})
@@ -2417,12 +2427,12 @@ USER INSTRUCTION:
 SINGLE-PHOTO EDITING RULES:
 - Treat the supplied image as the primary and only source image.
 - Do NOT combine it with any other image because there is only one reference.
-- Preserve the same person, identity, face, body, and recognizable features unless the user explicitly asks to change them.
+- Preserve the same person and recognizable identity as strongly as possible. Do not redesign, beautify, age, or replace the face unless the user explicitly asks for a face change.
 - Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.
 - Make ONLY the changes requested by the user; do not invent extra changes.
 - If the user asks for a face swap, use the supplied face/reference as the identity source and blend it naturally into the target image.
 - If the user asks to change clothing, pose, lighting, background, or photography style, change those requested elements while keeping everything else consistent.
-- Keep realistic skin texture, natural asymmetry, shadows, highlights, perspective, and camera characteristics.
+- Keep realistic skin texture, natural asymmetry, facial proportions, shadows, highlights, perspective, lens characteristics, and photographic detail.
 - Do not duplicate the subject, split the image, create a collage, or place the source beside the result.
 - Do not output multiple images.
 - Produce ONE coherent final photograph.
