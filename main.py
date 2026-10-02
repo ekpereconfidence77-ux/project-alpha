@@ -2337,10 +2337,8 @@ def image_edit():
     """
     Dax image editor.
 
-    Primary image model: Google Gemini 3 Pro Image (Nano Banana Pro),
-    which is designed for conversational image editing and multiple
-    reference-image workflows. Cloudflare FLUX.2 Klein remains as a
-    fallback when GEMINI_API_KEY is not configured or Gemini is unavailable.
+    Primary image model: Google Gemini 3.1 Flash Image (Nano Banana 2),
+    which is designed for high-quality image editing and multiple reference-image workflows.
     """
 
     prompt = str(request.form.get("prompt", "")).strip()
@@ -2450,7 +2448,10 @@ Natural professional photography, realistic human skin and hair, physically corr
                 "response_format": {
                     "type": "image",
                     "mime_type": "image/jpeg",
-                    "image_size": "2K"
+                    "image_size": "4K"
+                },
+                "generation_config": {
+                    "thinking_level": "high"
                 }
             }
 
