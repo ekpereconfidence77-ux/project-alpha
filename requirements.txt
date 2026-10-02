@@ -1,5 +1,6 @@
-flask
+Flask
 requests
-gunicorn
-huggingface_hub
 Pillow
+Werkzeug
+pypdf
+python-docx
