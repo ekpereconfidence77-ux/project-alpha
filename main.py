@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, send_file
+from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-session-key-change-this-in-render"
@@ -325,11 +325,7 @@ LOGIN_HTML = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta name="theme-color" content="#071225">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" type="image/png" sizes="512x512" href="/app-icon.png">
-<link rel="apple-touch-icon" href="/app-icon.png">
-<title>Daxx — AI Assistant</title>
+<title>Dax — Sign in</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:#11151b;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -387,11 +383,6 @@ async function submitAuth(e){
  }catch(err){error.textContent=err.message;}finally{button.disabled=false;}
 }
 </script>
-<script>
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js").catch(() => {}));
-}
-</script>
 </body>
 </html>
 """
@@ -402,8 +393,15 @@ HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dax</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#11151b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/daxx-icon-512.png">
+<link rel="apple-touch-icon" href="/daxx-icon-512.png">
+<title>Daxx</title>
 
 <style>
 *{box-sizing:border-box}
@@ -908,14 +906,14 @@ button:disabled{
 <div id="historyOverlay" onclick="closeHistory()"></div>
 
 <div id="popoutPanel">
-  <div id="popoutHeader"><div id="popoutTitle">Dax</div><button id="popoutClose" onclick="closePopout()">✕</button></div>
+  <div id="popoutHeader"><div id="popoutTitle">Daxx</div><button id="popoutClose" onclick="closePopout()">✕</button></div>
   <div id="popoutBody" class="popout-content"></div>
 </div>
 
 <section id="main">
 
 <header style="position:relative">
-    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Dax</span><span id="webModeNote">Web</span></div>
+    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><img src="/daxx-icon-512.png" alt="Daxx" style="width:30px;height:30px;border-radius:9px;object-fit:cover"><span>Daxx</span><span id="webModeNote">Web</span></div>
     <div id="topbar-actions">
         <button class="topbar-btn" id="topVoiceButton" onclick="toggleRecording()" aria-label="Voice" title="Voice">
             <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
@@ -995,7 +993,7 @@ button:disabled{
         <button id="imageButton" class="icon-button" type="button" onclick="toggleAttachmentMenu()" aria-label="Add photos and files" title="Add photos and files">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <textarea id="message" rows="1" placeholder="Message Dax..." autocomplete="off" enterkeyhint="enter"></textarea>
+        <textarea id="message" rows="1" placeholder="Message Daxx..." autocomplete="off" enterkeyhint="enter"></textarea>
         <button id="micButton" class="icon-button" type="button" onclick="toggleRecording()" aria-label="Voice conversation" title="Voice">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
         </button>
@@ -1008,6 +1006,8 @@ button:disabled{
 </section>
 
 <script>
+
+if("serviceWorker" in navigator){ window.addEventListener("load",()=>navigator.serviceWorker.register("/service-worker.js").catch(()=>{})); }
 
 let mediaRecorder=null;
 let audioChunks=[];
@@ -2062,60 +2062,33 @@ def handle_unexpected_error(exc):
         }), 500
     raise exc
 
-@app.route("/app-icon.png")
-def app_icon():
-    icon_path = os.path.join(os.path.dirname(__file__), "daxx-icon-512.png")
-    if not os.path.exists(icon_path):
-        return jsonify({"error": "App icon not installed."}), 404
-    return send_file(icon_path, mimetype="image/png", max_age=86400)
-
+@app.route("/daxx-icon-512.png")
+def daxx_icon():
+    return send_file("daxx-icon-512.png", mimetype="image/png", max_age=86400)
 
 @app.route("/manifest.webmanifest")
 def manifest():
     return jsonify({
-        "name": "Daxx — AI Assistant",
+        "name": "Daxx AI",
         "short_name": "Daxx",
-        "description": "A personal AI assistant with chat, web search, voice, images and files.",
         "start_url": "/",
-        "scope": "/",
         "display": "standalone",
-        "background_color": "#071225",
-        "theme_color": "#071225",
-        "orientation": "portrait",
-        "icons": [
-            {"src": "/app-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
-        ]
+        "background_color": "#11151b",
+        "theme_color": "#11151b",
+        "description": "Daxx — your AI assistant",
+        "icons": [{"src":"/daxx-icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]
     })
-
 
 @app.route("/service-worker.js")
 def service_worker():
-    js = """
-const CACHE = "daxx-shell-v1";
-const SHELL = ["/manifest.webmanifest", "/app-icon.png"];
-self.addEventListener("install", event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+    js = '''self.addEventListener("install",e=>self.skipWaiting());
+self.addEventListener("activate",e=>self.clients.claim());
+self.addEventListener("fetch",e=>{
+  if(e.request.method!=="GET") return;
+  e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));
 });
-self.addEventListener("activate", event => {
-  event.waitUntil(self.clients.claim());
-});
-self.addEventListener("fetch", event => {
-  const req = event.request;
-  if (req.method !== "GET") return;
-  event.respondWith(
-    fetch(req).then(response => {
-      const copy = response.clone();
-      caches.open(CACHE).then(cache => cache.put(req, copy)).catch(() => {});
-      return response;
-    }).catch(() => caches.match(req))
-  );
-});
-"""
-    response = make_response(js)
-    response.headers["Content-Type"] = "application/javascript; charset=utf-8"
-    response.headers["Service-Worker-Allowed"] = "/"
-    return response
-
+'''
+    return Response(js,mimetype="application/javascript")
 
 @app.route("/")
 @login_required_page
