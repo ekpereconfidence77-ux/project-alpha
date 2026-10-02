@@ -2433,7 +2433,7 @@ PHOTOREALISM STANDARD:
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
-            gemini_input = [{"type": "text", "text": final_prompt}] + image_parts
+            gemini_input = image_parts + [{"type": "text", "text": final_prompt}]
             payload = {
                 "model": "gemini-3.1-flash-image",
                 "input": gemini_input,
@@ -2483,19 +2483,25 @@ PHOTOREALISM STANDARD:
                         "reference_count": len(image_parts)
                     })
 
-            # Don't expose a provider-specific failure if Cloudflare fallback works.
-            gemini_error = response.text[:500] if response is not None else "unknown error"
+            # If Gemini is configured, do not silently fall back to the
+            # lower-quality Cloudflare model. Returning the real provider
+            # error makes deployment/debugging possible and prevents a
+            # cartoon-like fallback from being mistaken for Gemini output.
+            detail = response.text[:1200] if response is not None else "unknown error"
+            return jsonify({
+                "error": f"Gemini image editor failed ({response.status_code if response is not None else 'unknown'}): {detail}"
+            }), 502
         except requests.Timeout:
-            gemini_error = "Gemini image request timed out"
+            return jsonify({"error": "Gemini image editor timed out. Please try again."}), 504
         except requests.RequestException as exc:
-            gemini_error = str(exc)
+            return jsonify({"error": f"Gemini image editor connection failed: {exc}"}), 502
         except Exception as exc:
-            gemini_error = str(exc)
+            return jsonify({"error": f"Gemini image editor failed: {exc}"}), 502
     else:
         gemini_error = "GEMINI_API_KEY is not configured"
 
     # ------------------------------------------------------------------
-    # FALLBACK: Cloudflare FLUX.2 Klein 4B
+    # FALLBACK: Cloudflare FLUX.2 Klein 4B -- only when Gemini key is absent.
     # ------------------------------------------------------------------
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
