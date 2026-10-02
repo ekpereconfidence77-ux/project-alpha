@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session
+from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-session-key-change-this-in-render"
@@ -340,6 +340,8 @@ input{width:100%;padding:13px 14px;border:1px solid #343b46;border-radius:12px;b
 button.primary{width:100%;border:0;border-radius:12px;padding:13px;background:#fff;color:#11151b;font-weight:700;font-size:15px;cursor:pointer}
 .error{min-height:20px;color:#ff8f8f;font-size:13px;margin:4px 0 12px;text-align:center}
 .note{font-size:12px;color:#7f8997;text-align:center;margin-top:18px;line-height:1.5}
+
+.message-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;opacity:.78}.message-action{border:1px solid #303743;background:transparent;color:#c9d0da;border-radius:8px;padding:5px 8px;font-size:11px;cursor:pointer}.message-action:hover{background:#202630;color:#fff}.install-banner{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);width:min(520px,calc(100vw - 24px));background:#1d232c;border:1px solid #39424f;border-radius:14px;padding:12px 14px;display:none;z-index:1400;box-shadow:0 12px 40px rgba(0,0,0,.4)}
 </style>
 </head>
 <body>
@@ -874,6 +876,7 @@ button:disabled{
     #imageButton,#micButton,#sendButton{width:44px;height:44px;flex-basis:44px}
 }
 </style>
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" href="/app-icon.svg">
 </head>
 
 <body>
@@ -902,6 +905,7 @@ button:disabled{
   <div id="popoutHeader"><div id="popoutTitle">Dax</div><button id="popoutClose" onclick="closePopout()">✕</button></div>
   <div id="popoutBody" class="popout-content"></div>
 </div>
+<div id="installBanner" class="install-banner"><div style="font-weight:700;margin-bottom:4px">Install Daxx</div><div style="opacity:.75;font-size:13px;margin-bottom:10px">Add Daxx to your Android home screen like an app.</div><div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="dismissInstall()">Not now</button><button onclick="installDaxx()">Install</button></div></div>
 
 <section id="main">
 
@@ -1104,6 +1108,9 @@ function renderDaxMarkdown(text){
     return safe;
 }
 
+async function copyText(text){try{await navigator.clipboard.writeText(text);setStatus("Copied.");setTimeout(()=>setStatus(""),1200);}catch(e){window.prompt("Copy this text:",text);}}
+async function shareText(text){try{if(navigator.share){await navigator.share({title:"Daxx",text});}else{await copyText(text);}}catch(e){}}
+async function regenerateLast(){if(!currentChatId)return;const ms=[...document.querySelectorAll("#chat .message.user")];if(!ms.length)return;const last=ms[ms.length-1].innerText;messageInput.value=last;autoResize();await sendMessage();}
 function addMessage(text,who){
     const div=document.createElement("div");
     div.className="message "+who;
@@ -1118,30 +1125,22 @@ function addMessage(text,who){
         bubble.style.borderRadius="18px 18px 5px 18px";
         bubble.style.textAlign="left";
         div.appendChild(bubble);
+        const actions=document.createElement("div"); actions.className="message-actions";
+        const edit=document.createElement("button"); edit.className="message-action"; edit.textContent="Edit"; edit.onclick=()=>{messageInput.value=text;autoResize();messageInput.focus();}; actions.appendChild(edit);
+        const copy=document.createElement("button"); copy.className="message-action"; copy.textContent="Copy"; copy.onclick=()=>copyText(text); actions.appendChild(copy);
+        div.appendChild(actions);
     }else{
         const body=document.createElement("div");
         body.className="message-body";
         body.innerHTML=renderDaxMarkdown(text);
         div.appendChild(body);
 
-        const actions=document.createElement("div");
-        actions.style.marginTop="7px";
-        actions.style.display="flex";
-        actions.style.gap="6px";
-
-        const readButton=document.createElement("button");
-        readButton.type="button";
-        readButton.textContent="🔊 Read aloud";
-        readButton.title="Read this message aloud";
-        readButton.style.border="0";
-        readButton.style.background="transparent";
-        readButton.style.cursor="pointer";
-        readButton.style.padding="4px 0";
-        readButton.style.fontSize="12px";
-        readButton.style.opacity=".7";
-        readButton.onclick=()=>speak(text);
-        actions.appendChild(readButton);
-
+        const actions=document.createElement("div"); actions.className="message-actions";
+        const makeAction=(label,fn)=>{const b=document.createElement("button");b.type="button";b.className="message-action";b.textContent=label;b.onclick=fn;return b;};
+        actions.appendChild(makeAction("Copy",()=>copyText(text)));
+        actions.appendChild(makeAction("Read aloud",()=>speak(text)));
+        actions.appendChild(makeAction("Share",()=>shareText(text)));
+        actions.appendChild(makeAction("Regenerate",()=>regenerateLast()));
         div.appendChild(actions);
     }
 
@@ -1342,6 +1341,12 @@ function closeHistory(){
     document.body.classList.remove("history-open");
 }
 
+let deferredInstallPrompt=null;
+window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstallPrompt=e;if(!localStorage.getItem("daxxInstallDismissed"))document.getElementById("installBanner").style.display="block";});
+async function installDaxx(){const b=document.getElementById("installBanner");if(!deferredInstallPrompt){b.style.display="none";alert("On Android Chrome, open the browser menu and choose Add to Home screen or Install app.");return;}deferredInstallPrompt.prompt();try{await deferredInstallPrompt.userChoice;}catch(e){}deferredInstallPrompt=null;b.style.display="none";}
+function dismissInstall(){localStorage.setItem("daxxInstallDismissed","1");document.getElementById("installBanner").style.display="none";}
+if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/service-worker.js").catch(()=>{}));
+
 async function logout(){
     if(!confirm("Log out of Dax?")) return;
     try{ await fetch("/logout",{method:"POST"}); }finally{ location.href="/login"; }
@@ -1442,6 +1447,8 @@ async function sendMessage(textFromVoice=null){
 
     if(!text) return;
 
+    const filesForThisTurn=[...chatImageFiles];
+    const imageModeForThisTurn=chatImageMode;
     addMessage(text,"user");
 
     messageInput.value="";
@@ -1461,9 +1468,9 @@ async function sendMessage(textFromVoice=null){
         form.append("message",text);
         form.append("conversation_id",currentChatId||"");
         form.append("force_web",forceWebSearch?"1":"0");
-        if(chatImageFiles.length){
-            chatImageFiles.forEach(f=>form.append("images",f));
-            form.append("image_mode",chatImageMode);
+        if(filesForThisTurn.length){
+            filesForThisTurn.forEach(f=>form.append("images",f));
+            form.append("image_mode",imageModeForThisTurn);
         }
         const response=await fetch("/chat",{method:"POST",body:form});
 
@@ -2326,6 +2333,25 @@ def plugins_api():
         {"id":"voice","name":"Voice","icon":"🎙️","description":"Record a message and transcribe it."}
     ]})
 
+
+@app.route("/manifest.webmanifest")
+def pwa_manifest():
+    return jsonify({
+        "name": "Daxx", "short_name": "Daxx", "description": "Daxx personal AI assistant",
+        "start_url": "/", "scope": "/", "display": "standalone",
+        "background_color": "#111418", "theme_color": "#111418", "orientation": "portrait-primary",
+        "icons": [{"src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+    })
+
+@app.route("/app-icon.svg")
+def pwa_icon():
+    svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#111418"/><circle cx="256" cy="256" r="170" fill="#2f6fed"/><path d="M155 181h170c35 0 63 28 63 63v25c0 35-28 63-63 63h-42l-46 48v-48h-82c-35 0-63-28-63-63v-25c0-35 28-63 63-63z" fill="white"/><circle cx="205" cy="256" r="15" fill="#2f6fed"/><circle cx="256" cy="256" r="15" fill="#2f6fed"/><circle cx="307" cy="256" r="15" fill="#2f6fed"/></svg>'''
+    return Response(svg, mimetype="image/svg+xml")
+
+@app.route("/service-worker.js")
+def service_worker():
+    js = '''const CACHE="daxx-shell-v1";self.addEventListener("install",e=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",e=>{if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));});'''
+    return Response(js, mimetype="application/javascript")
 
 @app.route("/live_time")
 @login_required_api
