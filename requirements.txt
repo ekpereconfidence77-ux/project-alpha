@@ -4,3 +4,4 @@ Pillow
 Werkzeug
 pypdf
 python-docx
+gunicorn
