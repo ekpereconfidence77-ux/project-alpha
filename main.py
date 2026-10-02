@@ -5,6 +5,8 @@ import base64
 import io
 import requests
 from PIL import Image
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session
@@ -30,7 +32,7 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 CHAT_MODEL = "openrouter/free"
 GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
-GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL") or "qwen/qwen3.8-27b"
+GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
 
 
 def init_db():
@@ -712,6 +714,14 @@ button:disabled{
     cursor:not-allowed
 }
 
+#attachmentMenu{display:none;position:absolute;left:10px;bottom:64px;background:#20252d;border:1px solid #343b46;border-radius:16px;padding:8px;box-shadow:0 12px 35px rgba(0,0,0,.4);z-index:40;min-width:190px}
+.attachment-option{display:flex;align-items:center;gap:10px;width:100%;height:44px;border-radius:11px;background:transparent;text-align:left;padding:0 12px;font-size:14px}
+.attachment-option:hover{background:#2b3039}
+.composer-wrap{position:sticky;bottom:0;z-index:20;background:#11151b}
+.icon-button{background:#2b3039;display:flex;align-items:center;justify-content:center}
+.icon-button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#attachmentPreview{display:none;max-width:860px;margin:0 auto;padding:6px 10px 0;font-size:12px;color:#cdd3dc}
+#attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
 #imagePanel{
     display:none;
     padding:12px;
@@ -892,15 +902,6 @@ button:disabled{
 
 <div id="imagePanel">
 
-    <div style="display:flex;gap:8px;margin-bottom:10px">
-        <button id="analyzeModeButton" type="button" onclick="setImageMode('analyze')" style="flex:1;width:auto;height:42px;border-radius:10px;background:#2a3039;font-size:14px">
-            🔍 Analyze screenshot
-        </button>
-        <button id="editModeButton" type="button" onclick="setImageMode('edit')" style="flex:1;width:auto;height:42px;border-radius:10px;background:#2a3039;font-size:14px">
-            🎨 Edit photo
-        </button>
-    </div>
-
     <input
         id="imageFile"
         type="file"
@@ -910,8 +911,8 @@ button:disabled{
 
     <div id="imagePreview"></div>
 
-    <div id="imageModeHelp" style="font-size:13px;opacity:.75;margin:6px 0">
-        Upload a screenshot or photo and Dax will read it, identify what is shown, and explain problems or text.
+    <div style="font-size:13px;opacity:.75;margin:6px 0">
+        Add photos only when you want Dax to use them for this image request. They are cleared automatically after a successful edit.
     </div>
 
     <div
@@ -921,62 +922,46 @@ button:disabled{
         No photos selected
     </div>
 
-    <textarea
+    <input
         id="imagePrompt"
-        rows="2"
-        placeholder="Ask Dax what to look at in the screenshot..."
-        style="width:100%;border-radius:12px;margin-bottom:8px;resize:vertical"
-    ></textarea>
-
-    <button
-        id="analyzeButton"
-        onclick="analyzeImage()"
-        style="display:block;background:#2a6df4;width:100%;height:46px;border-radius:12px"
+        placeholder="Tell Dax how to edit the selected photos..."
     >
-        🔍 Analyze Screenshot
-    </button>
 
     <button
         id="editButton"
         onclick="editImage()"
-        style="display:none"
     >
         🎨 Edit Selected Photos
     </button>
 
 </div>
 
-<div class="composer">
-
-    <button
-        id="imageButton"
-        onclick="toggleImagePanel()"
-    >
-        🖼️
-    </button>
-
-    <button
-        id="micButton"
-        onclick="toggleRecording()"
-    >
-        🎤
-    </button>
-
-    <textarea
-        id="message"
-        rows="1"
-        placeholder="Message Dax..."
-        autocomplete="off"
-        enterkeyhint="enter"
-    ></textarea>
-
-    <button
-        id="sendButton"
-        onclick="sendMessage()"
-    >
-        ➤
-    </button>
-
+<div class="composer-wrap">
+    <div id="attachmentMenu">
+        <button class="attachment-option" type="button" onclick="chooseAnalyzeImage()">
+            <span>🖼️</span><span>Analyze photo / screenshot</span>
+        </button>
+        <button class="attachment-option" type="button" onclick="chooseEditImage()">
+            <span>✏️</span><span>Edit a photo</span>
+        </button>
+        <button class="attachment-option" type="button" onclick="takePhoto()">
+            <span>📷</span><span>Take a photo</span>
+        </button>
+    </div>
+    <input id="chatImageInput" type="file" accept="image/*" multiple hidden>
+    <div id="attachmentPreview"></div>
+    <div class="composer">
+        <button id="imageButton" class="icon-button" type="button" onclick="toggleAttachmentMenu()" aria-label="Add photos and files" title="Add photos and files">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <textarea id="message" rows="1" placeholder="Message Dax..." autocomplete="off" enterkeyhint="enter"></textarea>
+        <button id="micButton" class="icon-button" type="button" onclick="toggleRecording()" aria-label="Voice conversation" title="Voice">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+        </button>
+        <button id="sendButton" type="button" onclick="sendMessage()" aria-label="Send message" title="Send">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+        </button>
+    </div>
 </div>
 
 </section>
@@ -995,6 +980,11 @@ const messageInput=document.getElementById("message");
 const micButton=document.getElementById("micButton");
 const sendButton=document.getElementById("sendButton");
 const statusBox=document.getElementById("status");
+const chatImageInput=document.getElementById("chatImageInput");
+const attachmentMenu=document.getElementById("attachmentMenu");
+const attachmentPreview=document.getElementById("attachmentPreview");
+let chatImageFiles=[];
+let chatImageMode="analyze";
 
 function setStatus(t){
     statusBox.textContent=t||"";
@@ -1339,6 +1329,10 @@ async function sendMessage(textFromVoice=null){
     addMessage(text,"user");
 
     messageInput.value="";
+    chatImageFiles=[];
+    chatImageInput.value="";
+    attachmentPreview.innerHTML="";
+    attachmentPreview.style.display="none";
 
     setStatus("");
     sendButton.disabled=true;
@@ -1347,16 +1341,14 @@ async function sendMessage(textFromVoice=null){
 
     try{
 
-        const response=await fetch("/chat",{
-            method:"POST",
-            headers:{
-                "Content-Type":"application/json"
-            },
-            body:JSON.stringify({
-                message:text,
-                conversation_id:currentChatId
-            })
-        });
+        const form=new FormData();
+        form.append("message",text);
+        form.append("conversation_id",currentChatId||"");
+        if(chatImageFiles.length){
+            chatImageFiles.forEach(f=>form.append("images",f));
+            form.append("image_mode",chatImageMode);
+        }
+        const response=await fetch("/chat",{method:"POST",body:form});
 
         const raw=await response.text();
 
@@ -1408,6 +1400,47 @@ async function sendMessage(textFromVoice=null){
 }
 
 
+function toggleAttachmentMenu(){
+    attachmentMenu.style.display=attachmentMenu.style.display==="block"?"none":"block";
+}
+
+function chooseAnalyzeImage(){
+    chatImageMode="analyze";
+    attachmentMenu.style.display="none";
+    chatImageInput.setAttribute("capture","environment");
+    chatImageInput.click();
+}
+
+function chooseEditImage(){
+    attachmentMenu.style.display="none";
+    toggleImagePanel();
+}
+
+function takePhoto(){
+    chatImageMode="analyze";
+    attachmentMenu.style.display="none";
+    chatImageInput.setAttribute("capture","environment");
+    chatImageInput.click();
+}
+
+function updateChatImagePreview(){
+    chatImageFiles=Array.from(chatImageInput.files||[]).slice(0,3);
+    attachmentPreview.innerHTML="";
+    if(!chatImageFiles.length){ attachmentPreview.style.display="none"; return; }
+    attachmentPreview.style.display="block";
+    const label=document.createElement("span");
+    label.textContent=`${chatImageFiles.length} image${chatImageFiles.length===1?"":"s"} attached`;
+    attachmentPreview.appendChild(label);
+    chatImageFiles.forEach(f=>{
+        const img=document.createElement("img"); img.src=URL.createObjectURL(f); attachmentPreview.appendChild(img);
+    });
+}
+
+chatImageInput.addEventListener("change",updateChatImagePreview);
+document.addEventListener("click",e=>{
+    if(!attachmentMenu.contains(e.target) && e.target!==document.getElementById("imageButton")){ attachmentMenu.style.display="none"; }
+});
+
 function toggleImagePanel(){
 
     const panel=document.getElementById("imagePanel");
@@ -1416,94 +1449,6 @@ function toggleImagePanel(){
         panel.style.display==="none"
         ?"block"
         :"none";
-}
-
-
-let imageMode="analyze";
-
-function setImageMode(mode){
-    imageMode=mode;
-    const analyzeButton=document.getElementById("analyzeButton");
-    const editButton=document.getElementById("editButton");
-    const prompt=document.getElementById("imagePrompt");
-    const help=document.getElementById("imageModeHelp");
-    const analyzeModeButton=document.getElementById("analyzeModeButton");
-    const editModeButton=document.getElementById("editModeButton");
-
-    if(mode==="analyze"){
-        analyzeButton.style.display="block";
-        editButton.style.display="none";
-        prompt.placeholder="Ask Dax what to look at in the screenshot...";
-        help.textContent="Upload a screenshot or photo and Dax will read it, identify what is shown, and explain problems or text.";
-        analyzeModeButton.style.background="#2a6df4";
-        editModeButton.style.background="#2a3039";
-    }else{
-        analyzeButton.style.display="none";
-        editButton.style.display="block";
-        prompt.placeholder="Tell Dax how to edit the selected photos...";
-        help.textContent="Add photos only when you want Dax to use them for an image-editing request.";
-        analyzeModeButton.style.background="#2a3039";
-        editModeButton.style.background="#7b3cff";
-    }
-}
-
-async function analyzeImage(){
-    const files=Array.from(document.getElementById("imageFile").files||[]);
-    const question=document.getElementById("imagePrompt").value.trim();
-
-    if(!files.length){
-        alert("Select a screenshot or photo first.");
-        return;
-    }
-    if(files.length>3){
-        alert("Dax can analyze up to 3 images at a time.");
-        return;
-    }
-    if(!question){
-        alert("Tell Dax what you want it to inspect, or ask: What is wrong here?");
-        return;
-    }
-
-    const totalBytes=files.reduce((sum,f)=>sum+f.size,0);
-    if(totalBytes>45*1024*1024){
-        alert("The selected screenshots are too large together. Please keep the total under 45 MB.");
-        return;
-    }
-
-    const button=document.getElementById("analyzeButton");
-    button.disabled=true;
-    setStatus("🔍 Dax is reading the screenshot...");
-
-    try{
-        const fd=new FormData();
-        fd.append("question",question);
-        fd.append("conversation_id",currentChatId ?? "");
-        files.forEach(file=>fd.append("images",file));
-
-        const r=await fetch("/analyze_image",{method:"POST",body:fd});
-        const raw=await r.text();
-        let d;
-        try{
-            d=JSON.parse(raw);
-        }catch(e){
-            throw new Error("Dax server returned a non-JSON error (HTTP "+r.status+").");
-        }
-        if(!r.ok) throw new Error(d.error||"Screenshot analysis failed.");
-
-        if(d.image_url){
-            addImageMessage(d.image_url,"🖼️ Screenshot");
-        }
-        addMessage(d.reply||"I could not analyze that image.","alpha");
-        currentChatId=d.conversation_id||currentChatId;
-        clearImageComposer();
-        setStatus("");
-        await loadHistory();
-    }catch(e){
-        setStatus("");
-        alert("Screenshot analysis error: "+e.message);
-    }finally{
-        button.disabled=false;
-    }
 }
 
 
@@ -1654,7 +1599,6 @@ function clearImageComposer(){
     if(panel){
         panel.style.display="none";
     }
-    setImageMode("analyze");
 }
 
 
@@ -1969,20 +1913,14 @@ async function transcribeAudio(blob){
 }
 
 
-messageInput.addEventListener(
-    "keydown",
-    e=>{
-        // On phones, Enter/Return inserts a new line. The keyboard's
-        // return key is explicitly configured as an "enter" key above.
-        // Ctrl/Cmd+Enter is an optional desktop shortcut for sending.
-        if(e.key==="Enter" && (e.ctrlKey || e.metaKey)){
-            e.preventDefault();
-            if(!sendButton.disabled){
-                sendMessage();
-            }
-        }
+messageInput.addEventListener("keydown",e=>{
+    // Enter/Return always creates a new line, matching a multiline composer.
+    // Ctrl+Enter (or Cmd+Enter) is the optional keyboard shortcut to send.
+    if(e.key==="Enter" && (e.ctrlKey || e.metaKey)){
+        e.preventDefault();
+        if(!sendButton.disabled) sendMessage();
     }
-);
+});
 
 messageInput.addEventListener("input",autoResize);
 
@@ -2018,7 +1956,7 @@ messageInput.addEventListener("paste",()=>{
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(exc):
-    if request.path.startswith(("/chat", "/analyze_image", "/image_edit", "/transcribe", "/history", "/current_chat", "/new_chat")):
+    if request.path.startswith(("/chat", "/image_edit", "/transcribe", "/history", "/current_chat", "/new_chat")):
         app.logger.exception("Unhandled Dax API error")
         return jsonify({
             "error": f"Dax server error: {str(exc)}"
@@ -2245,6 +2183,13 @@ def plugins_api():
     ]})
 
 
+@app.route("/live_time")
+@login_required_api
+def live_time():
+    now = datetime.now(ZoneInfo("Africa/Lagos"))
+    return jsonify({"iso": now.isoformat(), "time": now.strftime("%I:%M:%S %p"), "date": now.strftime("%A, %d %B %Y"), "timezone":"Africa/Lagos"})
+
+
 @app.route("/chat", methods=["POST"])
 @login_required_api
 def chat():
@@ -2257,8 +2202,15 @@ def chat():
     point of failure for normal chat.
     """
 
-    data = request.get_json(silent=True) or {}
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+    else:
+        data = request.form.to_dict()
     user_message = str(data.get("message", "")).strip()
+    chat_images = [f for f in request.files.getlist("images") if f and f.filename]
+    image_mode = str(data.get("image_mode", "analyze"))
+    if len(chat_images) > 3:
+        return jsonify({"error":"You can attach up to 3 images for analysis."}), 400
 
     if not user_message:
         return jsonify({"error": "Message cannot be empty."}), 400
@@ -2307,9 +2259,12 @@ learning and creative tasks.
 Do not claim that you completed an action that you did not actually complete.
 Keep answers reasonably concise unless the user asks for detail.
 
-When browser search is available and used, use the information it returns
-for current or recently changing questions. Include useful source references
-when the provider supplies them. Never invent sources or URLs.
+When browser search is available, use it for live Internet information such as
+latest news, current events, current prices, sports, weather, exchange rates,
+product availability, public web pages, and other information that can change.
+For exact current time in Nigeria, the application can provide a live Africa/Lagos
+clock. Never claim a live result without actually using the available live source.
+Include useful source references when the provider supplies them. Never invent sources or URLs.
 
 If the user asks you to remember something, the application may save it as
 a user memory. Do not claim to remember something unless it is present in
@@ -2331,13 +2286,45 @@ the supplied conversation or memory context.
                 "content": content
             })
 
+    # Current-turn image understanding. Groq's Qwen 3.8 27B accepts up to
+    # three image inputs and can read screenshots, UI text, documents and photos.
+    current_user_content = user_message
+    if chat_images:
+        if image_mode == "analyze":
+            current_user_content = (
+                "Analyze the attached image(s) carefully. Read visible text/OCR, "
+                "inspect the UI or scene, identify errors and explain concrete "
+                "fixes when the user asks for troubleshooting. Do not pretend "
+                "you can see anything that is not visible.\n\n" + user_message
+            )
+        parts = [{"type":"text","text":current_user_content}]
+        for f in chat_images:
+            raw = f.read()
+            if not raw: continue
+            mime = f.mimetype or "image/jpeg"
+            if mime not in ("image/jpeg","image/png","image/gif","image/webp"):
+                continue
+            encoded = base64.b64encode(raw).decode("utf-8")
+            parts.append({"type":"image_url","image_url":{"url":f"data:{mime};base64,{encoded}"}})
+        # Replace the just-saved text-only user message in the provider context.
+        messages[-1] = {"role":"user","content":parts}
+
     web_keywords = (
         "search the web", "search online", "look this up", "look it up",
         "find online", "latest", "current", "today", "news", "recent",
         "source", "sources", "reference", "references", "according to",
-        "what happened", "right now", "this week"
+        "what happened", "right now", "this week", "this month",
+        "weather", "temperature", "forecast", "rain", "exchange rate", "dollar",
+        "naira", "price", "cost", "stock", "shares", "bitcoin", "crypto",
+        "sports", "score", "match", "game", "traffic", "opening hours",
+        "available now", "live", "internet", "online", "website", "who is"
     )
     use_web = any(k in lower for k in web_keywords)
+    time_words = ("what time is it", "current time", "live clock", "time now", "what's the time", "whats the time")
+    if any(k in lower for k in time_words):
+        now = datetime.now(ZoneInfo("Africa/Lagos"))
+        messages[0]["content"] += f"\n\nLIVE CLOCK (Africa/Lagos): {now.strftime('%A, %d %B %Y, %I:%M:%S %p')} WAT. Use this exact current time when answering."
+        use_web = False
 
     groq_key = os.environ.get("GROQ_API_KEY")
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
@@ -2351,13 +2338,13 @@ the supplied conversation or memory context.
     # ------------------------------------------------------------
     if groq_key:
         groq_payload = {
-            "model": GROQ_CHAT_MODEL,
+            "model": GROQ_VISION_MODEL if chat_images else GROQ_CHAT_MODEL,
             "messages": messages,
             "temperature": 0.7,
             "max_completion_tokens": 4096
         }
 
-        if use_web:
+        if use_web and not chat_images:
             # GPT-OSS supports Groq's server-side browser_search.
             groq_payload["tools"] = [{"type": "browser_search"}]
             groq_payload["tool_choice"] = "required"
@@ -2395,7 +2382,7 @@ the supplied conversation or memory context.
                 # before moving to another provider.
                 if use_web:
                     retry_payload = {
-                        "model": GROQ_CHAT_MODEL,
+                        "model": GROQ_VISION_MODEL if chat_images else GROQ_CHAT_MODEL,
                         "messages": messages,
                         "temperature": 0.7,
                         "max_completion_tokens": 4096
@@ -2726,182 +2713,6 @@ def transcribe():
             "error":
             f"Voice transcription failed: {str(e)}"
         }),500
-
-
-@app.route("/analyze_image", methods=["POST"])
-@login_required_api
-def analyze_image():
-    """
-    Let Dax inspect uploaded screenshots/photos in normal chat using Groq's
-    multimodal vision model. This is analysis/OCR/visual Q&A, not image editing.
-    """
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if not groq_key:
-        return jsonify({
-            "error": "GROQ_API_KEY is not set in Render Environment Variables."
-        }), 500
-
-    question = str(request.form.get("question", "")).strip()
-    images = [f for f in request.files.getlist("images") if f and f.filename]
-
-    if not question:
-        return jsonify({"error": "Tell Dax what you want it to inspect."}), 400
-    if not images:
-        return jsonify({"error": "Please upload at least one screenshot or photo."}), 400
-    if len(images) > 3:
-        return jsonify({"error": "Dax can analyze up to 3 images at a time."}), 400
-
-    user_id = get_current_user_id()
-    conversation_id = request.form.get("conversation_id")
-    try:
-        conversation_id = int(conversation_id) if conversation_id else None
-    except Exception:
-        conversation_id = None
-
-    if not conversation_id or not conversation_belongs_to_user(conversation_id, user_id):
-        conversation_id = create_conversation(user_id, question[:80])
-
-    image_content = []
-    attached_previews = []
-
-    try:
-        for index, upload in enumerate(images):
-            raw = upload.read()
-            if not raw:
-                continue
-
-            # Keep screenshots crisp for OCR. Only resize very large images.
-            source = Image.open(io.BytesIO(raw)).convert("RGB")
-            w, h = source.size
-            if max(w, h) > 2400:
-                scale = 2400 / max(w, h)
-                source = source.resize(
-                    (max(1, int(w * scale)), max(1, int(h * scale))),
-                    Image.Resampling.LANCZOS
-                )
-
-            output = io.BytesIO()
-            source.save(output, format="JPEG", quality=92, optimize=True)
-            image_bytes = output.getvalue()
-
-            if len(image_bytes) > 20 * 1024 * 1024:
-                return jsonify({
-                    "error": f"Screenshot {index + 1} is too large. Please use an image under 20 MB."
-                }), 400
-
-            data_uri = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("utf-8")
-            image_content.append({
-                "type": "image_url",
-                "image_url": {"url": data_uri}
-            })
-
-            # Show the screenshot in the conversation as an attachment.
-            attached_previews.append(data_uri)
-
-    except Exception as exc:
-        return jsonify({"error": f"Could not read the uploaded image: {exc}"}), 400
-
-    if not image_content:
-        return jsonify({"error": "The uploaded images could not be read."}), 400
-
-    system_prompt = """
-You are Dax's visual assistant. You can inspect screenshots and photographs.
-
-Analyze what is actually visible in the supplied image(s). Read visible text,
-UI labels, error messages, code, buttons and other details when legible.
-For software screenshots, identify concrete problems and explain what the
-user should change. For photographs, describe visible details and answer the
-user's question.
-
-Do not claim to see anything that is not visible. If text is blurry or hidden,
-say so. Do not invent error messages, buttons, URLs, people, or facts.
-
-When the user asks for a troubleshooting diagnosis, separate:
-1. What is visibly happening.
-2. The most likely technical cause, clearly marked as an inference.
-3. The practical next step.
-
-Be concise but useful.
-""".strip()
-
-    content = [{"type": "text", "text": question}] + image_content
-    payload = {
-        "model": GROQ_VISION_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content}
-        ],
-        "temperature": 0.2,
-        "max_completion_tokens": 4096
-    }
-
-    try:
-        result = requests.post(
-            GROQ_CHAT_URL,
-            headers={
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type": "application/json"
-            },
-            json=payload,
-            timeout=120
-        )
-    except requests.RequestException as exc:
-        return jsonify({"error": f"Could not contact Dax's vision model: {exc}"}), 502
-
-    if not result.ok:
-        try:
-            error_data = result.json()
-            detail = error_data.get("error", {}).get("message", result.text)
-        except Exception:
-            detail = result.text
-        return jsonify({
-            "error": f"Vision model error ({result.status_code}): {detail}"
-        }), 502
-
-    try:
-        data = result.json()
-        choices = data.get("choices", [])
-        if not choices:
-            return jsonify({"error": "The vision model returned no analysis."}), 502
-        reply = choices[0].get("message", {}).get("content", "")
-        if isinstance(reply, list):
-            reply = "".join(
-                str(part.get("text", "")) if isinstance(part, dict) else str(part)
-                for part in reply
-            )
-        reply = str(reply).strip()
-    except Exception:
-        return jsonify({"error": "Dax received an invalid vision response."}), 502
-
-    if not reply:
-        return jsonify({"error": "Dax received an empty visual analysis."}), 502
-
-    # Save the question and answer in the current conversation.
-    save_message(
-        conversation_id,
-        "user",
-        "🖼️ Screenshot/photo attached\n" + question
-    )
-    save_message(conversation_id, "assistant", reply)
-
-    rows_after = get_messages(conversation_id, user_id)
-    if len(rows_after) <= 2:
-        rename_conversation(conversation_id, user_id, question[:80])
-
-    response = jsonify({
-        "success": True,
-        "reply": reply,
-        "conversation_id": conversation_id,
-        "image_url": attached_previews[0] if attached_previews else None
-    })
-    response.set_cookie(
-        "alpha_chat_id",
-        str(conversation_id),
-        max_age=60 * 60 * 24 * 365,
-        httponly=True,
-        samesite="Lax"
-    )
-    return response
 
 
 @app.route("/image_edit", methods=["POST"])
