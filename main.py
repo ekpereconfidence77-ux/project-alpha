@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session
+from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, send_file
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-session-key-change-this-in-render"
@@ -325,7 +325,11 @@ LOGIN_HTML = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Dax — Sign in</title>
+<meta name="theme-color" content="#071225">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="512x512" href="/app-icon.png">
+<link rel="apple-touch-icon" href="/app-icon.png">
+<title>Daxx — AI Assistant</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:#11151b;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -381,6 +385,11 @@ async function submitAuth(e){
    if(!r.ok) throw new Error(d.error||'Authentication failed.');
    location.href='/';
  }catch(err){error.textContent=err.message;}finally{button.disabled=false;}
+}
+</script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js").catch(() => {}));
 }
 </script>
 </body>
@@ -2052,6 +2061,61 @@ def handle_unexpected_error(exc):
             "error": f"Dax server error: {str(exc)}"
         }), 500
     raise exc
+
+@app.route("/app-icon.png")
+def app_icon():
+    icon_path = os.path.join(os.path.dirname(__file__), "daxx-icon-512.png")
+    if not os.path.exists(icon_path):
+        return jsonify({"error": "App icon not installed."}), 404
+    return send_file(icon_path, mimetype="image/png", max_age=86400)
+
+
+@app.route("/manifest.webmanifest")
+def manifest():
+    return jsonify({
+        "name": "Daxx — AI Assistant",
+        "short_name": "Daxx",
+        "description": "A personal AI assistant with chat, web search, voice, images and files.",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#071225",
+        "theme_color": "#071225",
+        "orientation": "portrait",
+        "icons": [
+            {"src": "/app-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+        ]
+    })
+
+
+@app.route("/service-worker.js")
+def service_worker():
+    js = """
+const CACHE = "daxx-shell-v1";
+const SHELL = ["/manifest.webmanifest", "/app-icon.png"];
+self.addEventListener("install", event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+self.addEventListener("activate", event => {
+  event.waitUntil(self.clients.claim());
+});
+self.addEventListener("fetch", event => {
+  const req = event.request;
+  if (req.method !== "GET") return;
+  event.respondWith(
+    fetch(req).then(response => {
+      const copy = response.clone();
+      caches.open(CACHE).then(cache => cache.put(req, copy)).catch(() => {});
+      return response;
+    }).catch(() => caches.match(req))
+  );
+});
+"""
+    response = make_response(js)
+    response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
 
 @app.route("/")
 @login_required_page
