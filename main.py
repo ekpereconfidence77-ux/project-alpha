@@ -469,20 +469,27 @@ HTML = r"""
 
 <style>
 *{box-sizing:border-box}
-
+html,body{width:100%;height:100%;margin:0}
 body{
-    margin:0;
-    background:#11151b;
-    color:#fff;
-    font-family:Arial,sans-serif;
-    height:100vh;
-    display:flex
+    background:#0f1115;
+    color:#f4f4f5;
+    font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    height:100dvh;
+    min-height:100vh;
+    display:flex;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility
 }
+button,input,textarea{font:inherit}
+button{touch-action:manipulation}
+::selection{background:#315da8;color:#fff}
 
 #sidebar{
-    width:260px;
-    background:#181d25;
-    border-right:1px solid #2a303a;
+    width:272px;
+    flex:0 0 272px;
+    background:#17191e;
+    border-right:1px solid #292c33;
     padding:12px;
     display:flex;
     flex-direction:column
@@ -526,16 +533,20 @@ body{
 }
 
 #main{
-    flex:1;
+    flex:1 1 auto;
+    min-width:0;
+    min-height:0;
     display:flex;
     flex-direction:column;
-    min-width:0
+    background:#0f1115
 }
 
 header{
-    padding:10px 14px;
-    background:#181d25;
-    border-bottom:1px solid #2a303a;
+    padding:10px 18px;
+    background:rgba(15,17,21,.92);
+    border-bottom:1px solid #292c33;
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
     font-size:17px;
     font-weight:700;
     display:flex;
@@ -556,8 +567,9 @@ header{
 
 #chat{
     flex:1;
+    min-height:0;
     overflow-y:auto;
-    padding:24px 18px 150px;
+    padding:28px 20px 180px;
     display:flex;
     flex-direction:column;
     gap:2px;
@@ -640,49 +652,22 @@ header{
 
 .message{
     width:100%;
-    max-width:820px;
+    max-width:860px;
     margin:0 auto;
-    padding:13px 8px;
-    line-height:1.55;
+    padding:14px 10px;
+    line-height:1.65;
     white-space:pre-wrap;
-    word-wrap:break-word;
-    font-size:16px
+    overflow-wrap:anywhere;
+    font-size:16px;
 }
-
-.user{
-    align-self:center;
-    background:transparent;
-    display:flex;
-    justify-content:flex-end
-}
-
-.user::before{
-    content:"You";
-    display:none
-}
-
-.user{
-    text-align:right
-}
-
-.user{
-    color:#fff
-}
-
-.message-body{line-height:1.6;overflow-wrap:anywhere}
-.message-body a{color:#7db7ff;text-decoration:underline}
-.message-body code{background:#222832;border:1px solid #343b46;border-radius:5px;padding:2px 5px;font-family:monospace}
-
-.alpha{
-    align-self:center;
-    background:transparent;
-    color:#f2f4f7
-}
-
-.user, .alpha{
-    border-radius:12px
-}
-
+.user{align-self:center;display:flex;justify-content:flex-end;color:#fff}
+.user .message-body{background:#2a2f38;border-radius:18px 18px 5px 18px;padding:11px 14px;max-width:min(78%,620px);text-align:left}
+.alpha{align-self:center;background:transparent;color:#f2f4f7}
+.user,.alpha{border-radius:14px}
+.message-body{line-height:1.65;overflow-wrap:anywhere}
+.message-body a{color:#8ab4ff;text-decoration:underline}
+.message-body code{background:#20242b;border:1px solid #333943;border-radius:6px;padding:2px 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.message-body pre{background:#171a20;border:1px solid #2b3038;border-radius:12px;padding:12px;overflow:auto}
 .typing{
     display:flex;
     align-items:center;
@@ -802,7 +787,7 @@ button:disabled{
 .composer-wrap{position:sticky;bottom:0;z-index:20;background:#11151b}
 .icon-button{background:#2b3039;display:flex;align-items:center;justify-content:center}
 .icon-button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#attachmentPreview{display:none;max-width:860px;margin:0 auto;padding:6px 10px 0;font-size:12px;color:#cdd3dc}
+#attachmentPreview{display:none;max-width:860px;width:100%;margin:0 auto;padding:6px 12px 0;font-size:12px;color:#cdd3dc}
 #attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
 #imagePanel{
     display:none;
@@ -939,10 +924,48 @@ button:disabled{
     }
 
     .message{max-width:100%;padding-left:4px;padding-right:4px}
-    #chat{padding:18px 10px 145px}
-    .composer{padding:8px 8px 10px}
+    #chat{padding:18px 12px 170px}
+   .composer{padding:8px 8px 10px}
     #message{font-size:16px}
     #imageButton,#micButton,#sendButton{width:44px;height:44px;flex-basis:44px}
+}
+
+/* Final responsive polish */
+.side-tool{height:44px;color:#cfd3da}
+.side-tool:active,.topbar-btn:active,.message-action:active{transform:scale(.98)}
+.section-label{letter-spacing:.02em}
+.history-item{font-size:14px;color:#c8ccd3}
+#history{scrollbar-width:thin}
+.composer{width:100%;max-width:920px;margin:0 auto;padding:10px 14px 14px;gap:8px;background:#0f1115}
+.composer textarea{box-shadow:0 2px 12px rgba(0,0,0,.18)}
+.icon-button{flex:0 0 46px}
+#sendButton{box-shadow:0 2px 10px rgba(255,255,255,.08)}
+#status{max-width:920px;margin:0 auto;width:100%}
+.install-banner{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+@media(min-width:701px){
+  #historyToggle{display:none!important}
+}
+@media(max-width:700px){
+  body{height:100dvh}
+  header{padding:8px 10px;min-height:54px}
+  #topbar-title{font-size:16px}
+  #topbar-actions{gap:1px}
+  .topbar-btn{width:38px;height:38px}
+  #chat{padding:14px 8px 180px}
+  .message{font-size:15.5px;padding:11px 4px}
+  .user .message-body{max-width:88%;border-radius:17px 17px 5px 17px}
+  .dax-welcome{padding:30px 4px 12px}
+  .dax-welcome h1{font-size:26px}
+  .composer-wrap{padding-top:8px}
+  .composer{padding:7px 8px max(9px,env(safe-area-inset-bottom));gap:6px}
+  #message{min-height:44px;max-height:128px;padding:11px 13px;border-radius:20px}
+  #imageButton,#micButton,#sendButton{width:44px;height:44px;flex-basis:44px}
+  #attachmentMenu{left:8px;bottom:61px}
+}
+@media(max-width:380px){
+  #topbar-actions .topbar-btn:nth-child(n+3){display:none}
+  #message{font-size:15px}
+  #imageButton,#micButton,#sendButton{width:42px;height:42px;flex-basis:42px}
 }
 </style>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" href="/app-icon.svg">
