@@ -15,6 +15,15 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", S
 
 DB_FILE = "alpha_memory.db"
 
+
+def db_connect():
+    """Open a SQLite connection configured for Render/concurrent requests."""
+    conn = sqlite3.connect(DB_FILE, timeout=60, isolation_level=None)
+    conn.execute("PRAGMA busy_timeout=60000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -24,8 +33,11 @@ GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
 
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn = db_connect()
+    # WAL allows reads while another request is writing.  Set it once at
+    # startup; subsequent connections inherit the database journal mode.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -68,7 +80,7 @@ def init_db():
 
 
 def get_memories(user_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     rows = conn.execute(
         "SELECT memory FROM memories WHERE user_id = ? ORDER BY id ASC",
@@ -80,7 +92,7 @@ def get_memories(user_id):
 
 
 def save_memory(user_id, memory):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     conn.execute(
         "INSERT INTO memories (user_id, memory) VALUES (?, ?)",
@@ -92,7 +104,7 @@ def save_memory(user_id, memory):
 
 
 def create_conversation(user_id, title="New chat"):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     cur = conn.execute(
         "INSERT INTO conversations (user_id, title) VALUES (?, ?)",
@@ -108,7 +120,7 @@ def create_conversation(user_id, title="New chat"):
 
 
 def get_conversations(user_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     rows = conn.execute(
         """
@@ -125,7 +137,7 @@ def get_conversations(user_id):
 
 
 def get_messages(conversation_id, user_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     rows = conn.execute(
         """
@@ -143,7 +155,7 @@ def get_messages(conversation_id, user_id):
 
 
 def save_message(conversation_id, role, content):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     conn.execute(
         """
@@ -158,7 +170,7 @@ def save_message(conversation_id, role, content):
 
 
 def rename_conversation(conversation_id, user_id, title):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     conn.execute(
         """
@@ -174,7 +186,7 @@ def rename_conversation(conversation_id, user_id, title):
 
 
 def conversation_belongs_to_user(conversation_id, user_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
 
     row = conn.execute(
         """
@@ -1732,7 +1744,7 @@ def login():
     if not password:
         return jsonify({"error": "Enter your password."}), 400
 
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
     row = conn.execute("SELECT id, password_hash FROM users WHERE email = ?", (email,)).fetchone()
     conn.close()
     if not row or not check_password_hash(row[1], password):
@@ -1754,7 +1766,7 @@ def register():
         return jsonify({"error": "Password must be at least 8 characters."}), 400
 
     try:
-        conn = sqlite3.connect(DB_FILE, timeout=30)
+        conn = db_connect()
         cur = conn.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
         user_id = cur.lastrowid
         conn.commit()
@@ -1770,7 +1782,7 @@ def register():
 @app.route("/me")
 @login_required_api
 def me():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn = db_connect()
     row = conn.execute("SELECT email FROM users WHERE id = ?", (get_current_user_id(),)).fetchone()
     conn.close()
     return jsonify({"email": row[0] if row else ""})
