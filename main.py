@@ -318,12 +318,57 @@ body{
 }
 
 #sidebar{
-    width:260px;
+    width:280px;
     background:#181d25;
     border-right:1px solid #2a303a;
     padding:12px;
     display:flex;
     flex-direction:column
+}
+
+#sidebarBrand{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:8px 8px 16px;
+    font-size:22px;
+    font-weight:700;
+}
+
+#sidebarBrand small{
+    font-size:13px;
+    color:#8f98a6;
+    font-weight:500;
+}
+
+#sidebarTools{
+    display:grid;
+    gap:4px;
+    margin-bottom:12px;
+}
+
+.sidebar-tool{
+    width:100%;
+    height:42px;
+    border-radius:10px;
+    background:transparent;
+    color:#e8ebef;
+    text-align:left;
+    padding:0 12px;
+    font-size:15px;
+    border:0;
+    cursor:pointer;
+}
+
+.sidebar-tool:hover{background:#232831}
+
+#recentLabel{
+    color:#8f98a6;
+    font-size:12px;
+    font-weight:700;
+    padding:10px 10px 7px;
+    text-transform:uppercase;
+    letter-spacing:.4px;
 }
 
 #newChat{
@@ -657,6 +702,41 @@ button:disabled{
     padding:0 12px
 }
 
+.sources-box{
+    margin-top:12px;
+    padding:10px 12px;
+    border:1px solid #2f3641;
+    border-radius:12px;
+    background:#181d25;
+}
+
+.sources-title{
+    font-size:13px;
+    font-weight:700;
+    color:#dfe4eb;
+    margin-bottom:7px;
+}
+
+.source-item{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:7px 0;
+    border-top:1px solid #292f38;
+}
+
+.source-item:first-of-type{border-top:0}
+
+.source-item a{
+    color:#9fc7ff;
+    text-decoration:none;
+    font-size:13px;
+    line-height:1.35;
+    overflow-wrap:anywhere;
+}
+
+.source-item a:hover{text-decoration:underline}
+
 .image-result{
     max-width:100%;
     border-radius:12px;
@@ -717,7 +797,7 @@ button:disabled{
 
 @media(max-width:700px){
     #sidebar{
-        display:block;
+        display:flex;
         position:fixed;
         left:0;
         top:0;
@@ -754,8 +834,17 @@ button:disabled{
 <body>
 
 <aside id="sidebar">
-    <button id="closeHistory" onclick="closeHistory()">✕ Close history</button>
-    <button id="newChat" onclick="newChat()">＋ New chat</button>
+    <div id="sidebarBrand"><span>Dax</span><small>AI assistant</small></div>
+    <button id="closeHistory" onclick="closeHistory()">✕ Close</button>
+    <div id="sidebarTools">
+        <button class="sidebar-tool" onclick="focusSearch()">🔎 &nbsp;Search</button>
+        <button class="sidebar-tool" onclick="toggleImagePanel();closeHistory()">🖼️ &nbsp;Images</button>
+        <button class="sidebar-tool" onclick="showLibraryNotice()">📚 &nbsp;Library</button>
+        <button class="sidebar-tool" onclick="showProjectNotice()">📁 &nbsp;Projects</button>
+        <button class="sidebar-tool" onclick="showPluginNotice()">◉ &nbsp;Plugins</button>
+    </div>
+    <div id="recentLabel">Recents</div>
+    <button id="newChat" onclick="newChat();closeHistory()">＋ New chat</button>
     <div id="history"></div>
     <div style="border-top:1px solid #2a303a;padding-top:10px;margin-top:10px">
         <button id="logoutButton" onclick="logout()" style="width:100%;padding:10px;border:1px solid #343b46;border-radius:10px;background:#222832;color:#ddd;cursor:pointer">Log out</button>
@@ -766,7 +855,7 @@ button:disabled{
 
 <section id="main">
 
-<header><button id="historyToggle" onclick="toggleHistory()">☰</button>Dax</header>
+<header><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Dax</span></header>
 
 <div id="chat"></div>
 
@@ -948,10 +1037,13 @@ function addMessage(text,who){
         bubble.style.textAlign="left";
         div.appendChild(bubble);
     }else{
+        const parsed=splitSources(text);
         const body=document.createElement("div");
         body.className="message-body";
-        body.innerHTML=renderDaxMarkdown(text);
+        body.innerHTML=renderDaxMarkdown(parsed.body);
         div.appendChild(body);
+        const sourcesEl=renderSources(parsed.sources);
+        if(sourcesEl) div.appendChild(sourcesEl);
 
         const actions=document.createElement("div");
         actions.style.marginTop="7px";
@@ -1008,6 +1100,67 @@ function speak(text){
     u.pitch=1;
 
     speechSynthesis.speak(u);
+}
+
+function focusSearch(){
+    const q=prompt("Search your recent Dax chats:");
+    if(!q) return;
+    const items=[...document.querySelectorAll(".history-item")];
+    let found=0;
+    items.forEach(item=>{
+        const match=item.textContent.toLowerCase().includes(q.toLowerCase());
+        item.style.display=match?"block":"none";
+        if(match) found++;
+    });
+    if(!found) alert("No matching recent chat found.");
+}
+
+function showLibraryNotice(){
+    alert("Library is coming next. Your conversations remain available under Recents.");
+}
+
+function showProjectNotice(){
+    alert("Projects are coming next. Dax is keeping your existing chats safe.");
+}
+
+function showPluginNotice(){
+    alert("Plugins are coming next. Dax currently uses its built-in tools and web search.");
+}
+
+function renderSources(sources){
+    if(!Array.isArray(sources)||!sources.length) return null;
+    const box=document.createElement("div");
+    box.className="sources-box";
+    const title=document.createElement("div");
+    title.className="sources-title";
+    title.textContent="Sources";
+    box.appendChild(title);
+    sources.slice(0,8).forEach(source=>{
+        if(!source || !source.url) return;
+        const row=document.createElement("div");
+        row.className="source-item";
+        const a=document.createElement("a");
+        a.href=source.url;
+        a.target="_blank";
+        a.rel="noopener noreferrer";
+        a.textContent=source.title||source.url;
+        row.appendChild(a);
+        box.appendChild(row);
+    });
+    return box;
+}
+
+function splitSources(text){
+    const marker="\n\n**Sources**\n";
+    const idx=text.indexOf(marker);
+    if(idx<0) return {body:text,sources:[]};
+    const body=text.slice(0,idx);
+    const tail=text.slice(idx+marker.length);
+    const sources=[];
+    const re=/- \[(.*?)\]\((https?:\/\/[^\s)]+)\)/g;
+    let m;
+    while((m=re.exec(tail))!==null) sources.push({title:m[1],url:m[2]});
+    return {body,sources};
 }
 
 function toggleHistory(){
@@ -2177,18 +2330,29 @@ the supplied conversation or memory context.
         executed_tools = message_obj.get("executed_tools") or []
         sources = []
 
+        def collect_search_items(value):
+            if isinstance(value, dict):
+                for key in ("search_results", "results"):
+                    nested = value.get(key)
+                    if isinstance(nested, (list, dict)):
+                        yield from collect_search_items(nested)
+                url = value.get("url") or value.get("link")
+                title = value.get("title") or value.get("name") or value.get("source") or url
+                if url and isinstance(url, str) and url.startswith(("http://", "https://")):
+                    yield (str(title or url), url)
+                for key, nested in value.items():
+                    if key not in {"search_results", "results", "url", "link", "title", "name", "source"}:
+                        if isinstance(nested, (dict, list)):
+                            yield from collect_search_items(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    yield from collect_search_items(nested)
+
         for tool in executed_tools:
-            for item in (tool.get("search_results") or []):
-                if not isinstance(item, dict):
-                    continue
-
-                url = item.get("url") or item.get("link")
-                title = item.get("title") or item.get("name") or url
-
-                if url and url.startswith(("http://", "https://")):
-                    pair = (title, url)
-                    if pair not in sources:
-                        sources.append(pair)
+            for title, url in collect_search_items(tool):
+                pair = (title, url)
+                if pair not in sources:
+                    sources.append(pair)
 
         if sources:
             reply += "\n\n**Sources**\n" + "\n".join(
