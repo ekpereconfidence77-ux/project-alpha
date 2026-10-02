@@ -472,6 +472,17 @@ header{
     min-height:58px
 }
 
+#topbar-title{display:flex;align-items:center;gap:8px;min-width:0}
+#topbar-actions{margin-left:auto;display:flex;align-items:center;gap:5px}
+.topbar-btn{width:40px;height:40px;border:0;border-radius:10px;background:transparent;color:#dce2ea;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.topbar-btn:hover{background:#252b35}
+.topbar-btn.active{background:#2b3442;color:#fff}
+.topbar-btn svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+#chatMoreMenu{position:absolute;right:10px;top:58px;z-index:50;display:none;width:210px;background:#20252d;border:1px solid #343b46;border-radius:13px;box-shadow:0 12px 35px rgba(0,0,0,.35);padding:6px}
+#chatMoreMenu button{width:100%;text-align:left;border:0;background:transparent;color:#e6e9ee;padding:11px 12px;border-radius:9px;cursor:pointer;font-size:14px}
+#chatMoreMenu button:hover{background:#2a303a}
+#webModeNote{font-size:11px;color:#8ab4ff;display:none;margin-left:4px}
+
 #chat{
     flex:1;
     overflow-y:auto;
@@ -894,7 +905,28 @@ button:disabled{
 
 <section id="main">
 
-<header><button id="historyToggle" onclick="toggleHistory()">☰</button>Dax</header>
+<header style="position:relative">
+    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Dax</span><span id="webModeNote">Web</span></div>
+    <div id="topbar-actions">
+        <button class="topbar-btn" id="topVoiceButton" onclick="toggleRecording()" aria-label="Voice" title="Voice">
+            <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+        </button>
+        <button class="topbar-btn" id="topSearchButton" onclick="toggleWebMode()" aria-label="Search the web" title="Search the web">
+            <svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 5 5"/></svg>
+        </button>
+        <button class="topbar-btn" onclick="toggleChatMore()" aria-label="More" title="More">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+    </div>
+    <div id="chatMoreMenu">
+        <button onclick="shareCurrentChat()">↗️ Share chat</button>
+        <button onclick="renameCurrentChat()">✏️ Rename chat</button>
+        <button onclick="findInChat()">🔎 Find in chat</button>
+        <button onclick="readLastReply()">🔊 Read last reply</button>
+        <button onclick="newChat();closeChatMore()">＋ New chat</button>
+        <button onclick="deleteCurrentChat()" style="color:#ff8f8f">🗑️ Delete chat</button>
+    </div>
+</header>
 
 <div id="chat"></div>
 
@@ -985,6 +1017,7 @@ const attachmentMenu=document.getElementById("attachmentMenu");
 const attachmentPreview=document.getElementById("attachmentPreview");
 let chatImageFiles=[];
 let chatImageMode="analyze";
+let forceWebSearch=false;
 
 function setStatus(t){
     statusBox.textContent=t||"";
@@ -1218,6 +1251,62 @@ async function renderPluginsPanel(title,body){
     (d.plugins||[]).forEach(p=>{const card=document.createElement('div');card.className='popout-card';card.innerHTML='<div style="font-size:28px">'+p.icon+'</div><strong>'+escapeHtml(p.name)+'</strong><div style="opacity:.65;font-size:13px;margin-top:6px">'+escapeHtml(p.description)+'</div>';grid.appendChild(card)});
 }
 
+function toggleWebMode(){
+    forceWebSearch=!forceWebSearch;
+    document.getElementById("topSearchButton")?.classList.toggle("active",forceWebSearch);
+    const note=document.getElementById("webModeNote");
+    if(note) note.style.display=forceWebSearch?"inline":"none";
+    setStatus(forceWebSearch?"🌐 Web search is on for the next message.":"");
+}
+
+function toggleChatMore(){
+    const m=document.getElementById("chatMoreMenu");
+    m.style.display=m.style.display==="block"?"none":"block";
+}
+function closeChatMore(){document.getElementById("chatMoreMenu").style.display="none";}
+
+async function shareCurrentChat(){
+    closeChatMore();
+    const title="Dax chat";
+    const text=[...document.querySelectorAll("#chat .message")].map(x=>x.innerText).join("\n\n");
+    if(navigator.share){ try{ await navigator.share({title,text}); }catch(e){} }
+    else { try{ await navigator.clipboard.writeText(text); alert("Chat copied to clipboard."); }catch(e){ alert("Could not share this chat."); } }
+}
+
+async function renameCurrentChat(){
+    closeChatMore();
+    if(!currentChatId) return;
+    const title=prompt("Rename chat");
+    if(!title || !title.trim()) return;
+    const r=await fetch("/conversation/"+currentChatId+"/rename",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:title.trim()})});
+    if(!r.ok){alert("Could not rename this chat.");return;}
+    await loadHistory();
+}
+
+function findInChat(){
+    closeChatMore();
+    const q=prompt("Find in this chat");
+    if(!q) return;
+    const nodes=[...document.querySelectorAll("#chat .message")];
+    const hit=nodes.find(n=>n.innerText.toLowerCase().includes(q.toLowerCase()));
+    if(hit){ hit.scrollIntoView({behavior:"smooth",block:"center"}); hit.style.outline="2px solid #6ea8fe"; setTimeout(()=>hit.style.outline="",1800); }
+    else alert("No match found in this chat.");
+}
+
+function readLastReply(){
+    closeChatMore();
+    const replies=[...document.querySelectorAll("#chat .message.alpha")].filter(x=>x.id!=="typingIndicator");
+    if(replies.length) speak(replies[replies.length-1].querySelector(".message-body")?.innerText||replies[replies.length-1].innerText);
+}
+
+async function deleteCurrentChat(){
+    closeChatMore();
+    if(!currentChatId || !confirm("Delete this chat? This cannot be undone.")) return;
+    const r=await fetch("/conversation/"+currentChatId,{method:"DELETE"});
+    if(!r.ok){alert("Could not delete this chat.");return;}
+    await newChat();
+}
+
 function toggleHistory(){
     document.body.classList.toggle("history-open");
 }
@@ -1344,6 +1433,7 @@ async function sendMessage(textFromVoice=null){
         const form=new FormData();
         form.append("message",text);
         form.append("conversation_id",currentChatId||"");
+        form.append("force_web",forceWebSearch?"1":"0");
         if(chatImageFiles.length){
             chatImageFiles.forEach(f=>form.append("images",f));
             form.append("image_mode",chatImageMode);
@@ -2138,6 +2228,33 @@ def history_chat(conversation_id):
     })
 
 
+@app.route("/conversation/<int:conversation_id>/rename", methods=["POST"])
+@login_required_api
+def rename_conversation_api(conversation_id):
+    user_id=get_current_user_id()
+    data=request.get_json(silent=True) or {}
+    title=str(data.get("title","")).strip()[:120]
+    if not title: return jsonify({"error":"Enter a chat name."}),400
+    conn=db_connect()
+    row=conn.execute("SELECT id FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id)).fetchone()
+    if not row:
+        conn.close(); return jsonify({"error":"Chat not found."}),404
+    conn.execute("UPDATE conversations SET title=? WHERE id=? AND user_id=?",(title,conversation_id,user_id)); conn.commit(); conn.close()
+    return jsonify({"success":True,"title":title})
+
+@app.route("/conversation/<int:conversation_id>", methods=["DELETE"])
+@login_required_api
+def delete_conversation_api(conversation_id):
+    user_id=get_current_user_id()
+    conn=db_connect()
+    row=conn.execute("SELECT id FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id)).fetchone()
+    if not row:
+        conn.close(); return jsonify({"error":"Chat not found."}),404
+    conn.execute("DELETE FROM messages WHERE conversation_id=?",(conversation_id,))
+    conn.execute("DELETE FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id))
+    conn.commit(); conn.close()
+    return jsonify({"success":True})
+
 @app.route("/search")
 @login_required_api
 def search_content():
@@ -2309,6 +2426,8 @@ the supplied conversation or memory context.
         # Replace the just-saved text-only user message in the provider context.
         messages[-1] = {"role":"user","content":parts}
 
+    force_web = str(request.form.get("force_web", "0")).lower() in ("1","true","yes","on") if request.form else False
+
     web_keywords = (
         "search the web", "search online", "look this up", "look it up",
         "find online", "latest", "current", "today", "news", "recent",
@@ -2319,8 +2438,10 @@ the supplied conversation or memory context.
         "sports", "score", "match", "game", "traffic", "opening hours",
         "available now", "live", "internet", "online", "website", "who is"
     )
-    use_web = any(k in lower for k in web_keywords)
+    use_web = force_web or any(k in lower for k in web_keywords)
     time_words = ("what time is it", "current time", "live clock", "time now", "what's the time", "whats the time")
+    if chat_images:
+        use_web = False
     if any(k in lower for k in time_words):
         now = datetime.now(ZoneInfo("Africa/Lagos"))
         messages[0]["content"] += f"\n\nLIVE CLOCK (Africa/Lagos): {now.strftime('%A, %d %B %Y, %I:%M:%S %p')} WAT. Use this exact current time when answering."
