@@ -2393,13 +2393,17 @@ def image_edit():
                 continue
 
             # Cloudflare requires each reference image to be smaller than
-            # 512x512. Resize while preserving the original aspect ratio.
+            # 512x512. Keep the full source as reference 1. For a single
+            # uploaded photo, also create a dedicated high-detail identity
+            # crop so the model gets more facial information than it can
+            # retain from the whole photo alone.
             try:
                 source = Image.open(io.BytesIO(raw)).convert("RGB")
+                original_w, original_h = source.size
                 source.thumbnail((511, 511), Image.Resampling.LANCZOS)
 
                 output = io.BytesIO()
-                source.save(output, format="JPEG", quality=92, optimize=True)
+                source.save(output, format="JPEG", quality=95, optimize=True)
                 image_bytes = output.getvalue()
             except Exception as exc:
                 return jsonify({
@@ -2411,6 +2415,36 @@ def image_edit():
                 image_bytes,
                 "image/jpeg"
             )
+
+            # Single-photo identity aid: a square crop from the upper/central
+            # area where a portrait face is normally located. It is deliberately
+            # generated from the same uploaded image, so it cannot introduce a
+            # second person's identity.
+            if len(images) == 1:
+                try:
+                    identity_source = Image.open(io.BytesIO(raw)).convert("RGB")
+                    w, h = identity_source.size
+                    crop_size = max(1, min(w, h, int(min(w, h) * 0.78)))
+                    center_x = w / 2.0
+                    center_y = h * 0.42
+                    left = int(max(0, min(w - crop_size, center_x - crop_size / 2)))
+                    top = int(max(0, min(h - crop_size, center_y - crop_size / 2)))
+                    crop = identity_source.crop((left, top, left + crop_size, top + crop_size))
+                    crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
+
+                    crop_output = io.BytesIO()
+                    crop.save(crop_output, format="JPEG", quality=97, optimize=True)
+                    identity_bytes = crop_output.getvalue()
+
+                    multipart_files["input_image_1"] = (
+                        "identity_reference.jpg",
+                        identity_bytes,
+                        "image/jpeg"
+                    )
+                except Exception:
+                    # The full reference remains usable even if the optional
+                    # identity crop cannot be produced.
+                    pass
 
         if not multipart_files:
             return jsonify({
@@ -2425,8 +2459,9 @@ USER INSTRUCTION:
 {prompt}
 
 SINGLE-PHOTO EDITING RULES:
-- Treat the supplied image as the primary and only source image.
-- Do NOT combine it with any other image because there is only one reference.
+- The first supplied image is the FULL ORIGINAL PHOTO and is the primary composition/source reference.
+- If a second supplied image is present, it is an IDENTITY-ONLY FACE REFERENCE cropped from the same original photo. It is NOT a second person and must never be pasted in as a separate face or duplicate subject.
+- Use the identity reference to preserve the exact person's facial structure and recognizable identity: face shape, forehead, eyes, eyebrows, nose, nostrils, lips, mouth shape, cheeks, jawline, chin, ears, hairline, skin tone, natural asymmetry, facial hair and skin texture.
 - Preserve the same person and recognizable identity as strongly as possible. Do not redesign, beautify, age, or replace the face unless the user explicitly asks for a face change.
 - Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.
 - Make ONLY the changes requested by the user; do not invent extra changes.
@@ -2532,7 +2567,8 @@ MULTI-PHOTO EDITING RULES:
             "success": True,
             "image_url": image_url,
             "model": "@cf/black-forest-labs/flux-2-klein-9b",
-            "reference_count": len(multipart_files)
+            "reference_count": len(multipart_files),
+            "identity_reference_added": len(images) == 1 and "input_image_1" in multipart_files
         })
 
     except requests.Timeout:
