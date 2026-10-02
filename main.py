@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response
+from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response, send_file
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-session-key-change-this-in-render"
@@ -967,8 +967,64 @@ button:disabled{
   #message{font-size:15px}
   #imageButton,#micButton,#sendButton{width:42px;height:42px;flex-basis:42px}
 }
+
+/* DAXX ANDROID / CHATGPT-STYLE FINAL UI */
+html,body{background:#0b0d10!important}
+body{display:flex!important;align-items:stretch!important;justify-content:flex-start!important;padding:0!important;width:100%;height:100dvh;min-height:100dvh;overflow:hidden!important}
+#main{width:100%;min-width:0;height:100dvh;background:#0b0d10!important}
+#sidebar{position:fixed;left:0;top:0;bottom:0;width:300px;max-width:86vw;z-index:1000;transform:translateX(-105%);transition:transform .22s ease;box-shadow:12px 0 40px rgba(0,0,0,.5);display:flex}
+body.history-open #sidebar{transform:translateX(0)}
+#historyOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;display:none;backdrop-filter:blur(2px)}
+body.history-open #historyOverlay{display:block}
+#closeHistory{display:block!important}
+header{position:sticky!important;top:0;z-index:60;height:56px;min-height:56px;padding:6px 8px!important;background:rgba(11,13,16,.96)!important;border-bottom:1px solid #24272d!important}
+#topbar-title{gap:7px;font-size:17px!important;font-weight:650;flex:1}
+#historyToggle{display:flex!important;width:40px;height:40px;border-radius:10px;background:transparent;color:#e8eaed;align-items:center;justify-content:center;font-size:22px;border:0}
+#topbar-actions{gap:0!important}
+.topbar-btn{width:40px!important;height:40px!important;border-radius:10px!important}
+#chat{padding:8px 10px 148px!important;gap:0!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.dax-welcome{max-width:520px!important;margin:auto!important;padding:34px 10px 18px!important}
+.dax-welcome h1{font-size:25px!important;font-weight:650!important}
+.dax-welcome p{font-size:14px!important;margin-bottom:18px!important}
+.dax-suggestions{grid-template-columns:1fr 1fr!important;gap:8px!important}
+.dax-suggestion{min-height:68px!important;border-radius:13px!important;padding:11px!important;background:#15181d!important;border-color:#292d34!important}
+.message{max-width:100%!important;width:100%!important;padding:10px 3px!important;font-size:15.5px!important}
+.user .message-body{max-width:88%!important;background:#2a2f35!important;border-radius:18px 18px 5px 18px!important;padding:10px 13px!important}
+.alpha .message-body{max-width:100%!important;padding:4px 2px!important}
+.message-actions{padding-left:2px}
+.composer-wrap{position:fixed!important;left:0;right:0;bottom:0;z-index:80;background:linear-gradient(to top,#0b0d10 78%,rgba(11,13,16,0))!important;padding:7px 8px max(8px,env(safe-area-inset-bottom))!important}
+.composer{display:flex!important;width:100%!important;max-width:100%!important;height:auto!important;min-height:54px!important;margin:0!important;padding:6px!important;gap:6px!important;background:#1a1d22!important;border:1px solid #30343b!important;border-radius:27px!important;box-shadow:0 4px 22px rgba(0,0,0,.32)!important}
+#message{min-height:42px!important;max-height:120px!important;padding:10px 11px!important;border:0!important;background:transparent!important;box-shadow:none!important;border-radius:20px!important;font-size:16px!important}
+#message:focus{border:0!important;box-shadow:none!important}
+#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;flex:0 0 42px!important}
+#imageButton,#micButton{background:#292d34!important}
+#sendButton{background:#f1f3f5!important;color:#11151b!important}
+#attachmentMenu{left:8px!important;bottom:62px!important;border-radius:16px!important}
+#attachmentPreview{max-width:none!important;padding:4px 4px 6px!important}
+#imagePanel{max-width:none!important;margin:0!important;border-radius:14px 14px 0 0}
+#status{font-size:12px!important;padding-bottom:4px!important}
+.install-banner{bottom:82px!important;width:calc(100vw - 20px)!important}
+@media(min-width:701px){
+  body{padding:0!important}
+  #sidebar{position:fixed;display:flex;transform:translateX(-105%)}
+  body.history-open #sidebar{transform:translateX(0)}
+  #historyToggle{display:flex!important}
+  #chat{padding-left:max(12px,calc((100vw - 760px)/2))!important;padding-right:max(12px,calc((100vw - 760px)/2))!important}
+  .composer-wrap{padding-left:max(8px,calc((100vw - 760px)/2))!important;padding-right:max(8px,calc((100vw - 760px)/2))!important}
+}
+@media(max-width:430px){
+  .dax-suggestions{grid-template-columns:1fr!important}
+  .dax-suggestion{min-height:62px!important}
+  #topbar-actions .topbar-btn:nth-child(n+3){display:none!important}
+  .message{font-size:15.2px!important}
+}
+@media(max-width:360px){
+  #topbar-actions .topbar-btn:nth-child(n+2){display:none!important}
+  .dax-welcome h1{font-size:23px!important}
+}
+
 </style>
-<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" href="/app-icon.svg">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png"><link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
 </head>
 
 <body>
@@ -2491,8 +2547,19 @@ def pwa_manifest():
         "name": "Daxx", "short_name": "Daxx", "description": "Daxx personal AI assistant",
         "start_url": "/", "scope": "/", "display": "standalone",
         "background_color": "#111418", "theme_color": "#111418", "orientation": "portrait-primary",
-        "icons": [{"src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+        ]
     })
+
+@app.route("/icon-192.png")
+def pwa_icon_192():
+    return send_file(os.path.join(os.path.dirname(__file__), "icon-192.png"), mimetype="image/png", max_age=31536000)
+
+@app.route("/icon-512.png")
+def pwa_icon_512():
+    return send_file(os.path.join(os.path.dirname(__file__), "icon-512.png"), mimetype="image/png", max_age=31536000)
 
 @app.route("/app-icon.svg")
 def pwa_icon():
