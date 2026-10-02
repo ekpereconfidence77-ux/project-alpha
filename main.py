@@ -1023,6 +1023,66 @@ header{position:sticky!important;top:0;z-index:60;height:56px;min-height:56px;pa
   .dax-welcome h1{font-size:23px!important}
 }
 
+
+/* ===== DAXX MOBILE-FIRST CHAT UI: FINAL OVERRIDE ===== */
+html,body{width:100%;height:100%;margin:0!important;padding:0!important;background:#0b0d0f!important;overflow:hidden!important}
+body{display:block!important;color:#f7f7f8!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important}
+#sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:292px!important;max-width:86vw!important;height:100dvh!important;z-index:200!important;display:flex!important;flex-direction:column!important;transform:translateX(-105%)!important;background:#17181c!important;border:0!important;border-right:1px solid #2b2d31!important;padding:12px!important;box-shadow:18px 0 45px rgba(0,0,0,.45)!important;transition:transform .22s ease!important}
+body.history-open #sidebar{transform:translateX(0)!important}
+#historyOverlay{position:fixed!important;inset:0!important;z-index:190!important;background:rgba(0,0,0,.58)!important;display:none!important}
+body.history-open #historyOverlay{display:block!important}
+#main{position:relative!important;width:100%!important;height:100dvh!important;min-width:0!important;display:flex!important;flex-direction:column!important;background:#0b0d0f!important}
+header{position:relative!important;top:auto!important;left:auto!important;right:auto!important;width:100%!important;height:56px!important;min-height:56px!important;flex:0 0 56px!important;padding:6px 8px!important;background:#0b0d0f!important;border:0!important;box-shadow:none!important;z-index:80!important}
+#historyToggle{display:flex!important;align-items:center!important;justify-content:center!important;width:42px!important;height:42px!important;flex:0 0 42px!important;margin:0!important;padding:0!important;background:transparent!important;color:#f3f4f6!important;border-radius:12px!important}
+#topbar-title{font-size:17px!important;font-weight:650!important;justify-content:center!important;flex:1!important;min-width:0!important;white-space:nowrap!important}
+#topbar-actions{margin-left:0!important;display:flex!important;gap:0!important}
+.topbar-btn{width:42px!important;height:42px!important;flex:0 0 42px!important;border-radius:12px!important;background:transparent!important}
+#chat{position:relative!important;flex:1 1 auto!important;width:100%!important;min-height:0!important;overflow-y:auto!important;overflow-x:hidden!important;padding:8px 16px 145px!important;display:flex!important;flex-direction:column!important;gap:0!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior-y:contain!important}
+.message{width:100%!important;max-width:100%!important;margin:0!important;padding:13px 0!important;font-size:16px!important;line-height:1.6!important}
+.user{width:100%!important;justify-content:flex-end!important;align-self:stretch!important}
+.user .message-body{max-width:82%!important;background:#2f3033!important;border-radius:19px 19px 5px 19px!important;padding:10px 14px!important}
+.alpha .message-body{max-width:100%!important;padding:3px 0!important;background:transparent!important}
+.dax-welcome{width:100%!important;max-width:520px!important;margin:auto!important;padding:20px 4px 18px!important;text-align:center!important}
+.dax-welcome h1{font-size:26px!important;line-height:1.2!important;margin-bottom:8px!important}
+.dax-welcome p{font-size:14px!important;margin-bottom:22px!important;color:#9b9da3!important}
+.dax-suggestions{width:100%!important;grid-template-columns:1fr 1fr!important;gap:9px!important}
+.dax-suggestion{min-height:70px!important;padding:12px!important;border-radius:15px!important;background:#15171a!important;border:1px solid #292c30!important}
+.composer-wrap{position:fixed!important;left:0!important;right:0!important;bottom:0!important;width:100%!important;z-index:100!important;padding:8px 12px max(9px,env(safe-area-inset-bottom))!important;background:linear-gradient(to top,#0b0d0f 72%,rgba(11,13,15,0))!important;border:0!important}
+#status{width:100%!important;max-width:none!important;text-align:center!important;font-size:11px!important;color:#8b8e94!important;padding:0 0 5px!important}
+.composer{position:relative!important;width:100%!important;max-width:none!important;min-height:52px!important;height:auto!important;margin:0!important;padding:5px 6px!important;display:flex!important;align-items:flex-end!important;gap:5px!important;background:#202123!important;border:1px solid #3a3b3e!important;border-radius:27px!important;box-shadow:0 2px 18px rgba(0,0,0,.3)!important}
+#message{flex:1 1 auto!important;width:auto!important;min-width:0!important;min-height:42px!important;max-height:126px!important;margin:0!important;padding:10px 8px!important;border:0!important;background:transparent!important;color:#f5f5f5!important;border-radius:20px!important;font-size:16px!important;line-height:1.35!important;box-shadow:none!important;outline:none!important}
+#message:focus{border:0!important;box-shadow:none!important}
+#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;min-width:42px!important;flex:0 0 42px!important;margin:0!important;border-radius:50%!important;align-self:flex-end!important}
+#imageButton,#micButton{background:#2b2c30!important;color:#f1f2f3!important}
+#sendButton{background:#f4f4f4!important;color:#111214!important}
+#attachmentMenu{position:absolute!important;left:6px!important;bottom:60px!important;width:220px!important;border-radius:17px!important}
+#attachmentPreview{width:100%!important;max-width:none!important;padding:4px 2px 6px!important}
+#imagePanel{width:100%!important;max-width:none!important;margin:0!important;border-radius:16px!important}
+.install-banner{left:10px!important;right:10px!important;bottom:78px!important;width:auto!important}
+.message-actions{display:flex!important;flex-wrap:wrap!important;gap:5px!important}
+@media(max-width:430px){
+  header{height:54px!important;min-height:54px!important;flex-basis:54px!important}
+  #chat{padding-left:14px!important;padding-right:14px!important;padding-bottom:142px!important}
+  .message{font-size:15.5px!important}
+  .user .message-body{max-width:86%!important}
+  .dax-suggestions{grid-template-columns:1fr!important}
+  .dax-welcome{padding-top:18px!important}
+}
+@media(max-width:360px){
+  #topbar-actions .topbar-btn:nth-child(n+2){display:none!important}
+  .dax-welcome h1{font-size:23px!important}
+  #chat{padding-left:12px!important;padding-right:12px!important}
+  #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
+}
+@media(min-width:701px){
+  /* Keep the same phone-first experience on wider screens; only center the phone-like content. */
+  #main{max-width:760px!important;margin:0 auto!important;border-left:1px solid #202226!important;border-right:1px solid #202226!important}
+  #sidebar{display:none!important}
+  #historyToggle{display:flex!important}
+  #chat{padding-left:18px!important;padding-right:18px!important}
+  .composer-wrap{left:calc(50% - 380px)!important;right:calc(50% - 380px)!important;width:760px!important}
+}
+
 </style>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png"><link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
 </head>
