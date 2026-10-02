@@ -107,6 +107,21 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dax_attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            data_url TEXT,
+            text_content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -189,16 +204,70 @@ def get_messages(conversation_id, user_id):
 def save_message(conversation_id, role, content):
     conn = db_connect()
 
-    conn.execute(
+    cur = conn.execute(
         """
         INSERT INTO messages (conversation_id, role, content)
         VALUES (?, ?, ?)
         """,
         (conversation_id, role, content)
     )
+    message_id = cur.lastrowid
 
     conn.commit()
     conn.close()
+    return message_id
+
+
+def save_attachment(user_id, conversation_id, message_id, kind, filename, mime_type, data_url=None, text_content=None):
+    conn = db_connect()
+    conn.execute(
+        """INSERT INTO dax_attachments
+           (user_id, conversation_id, message_id, kind, filename, mime_type, data_url, text_content)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(user_id), conversation_id, message_id, kind, filename[:200], mime_type[:120], data_url, text_content)
+    )
+    conn.commit(); conn.close()
+
+
+def get_message_attachments(conversation_id, user_id):
+    conn = db_connect()
+    rows = conn.execute(
+        """SELECT message_id, kind, filename, mime_type, data_url, text_content
+           FROM dax_attachments
+           WHERE conversation_id=? AND user_id=? ORDER BY id ASC""",
+        (conversation_id, str(user_id))
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def extract_document_text(file_obj):
+    raw = file_obj.read()
+    if len(raw) > 2_000_000:
+        raise ValueError("Each document must be 2 MB or smaller.")
+    name = (file_obj.filename or "document").lower()
+    mime = file_obj.mimetype or "application/octet-stream"
+    if name.endswith((".txt", ".md", ".csv", ".json", ".log")) or mime.startswith("text/") or mime == "application/json":
+        return raw.decode("utf-8", errors="replace")[:60000]
+    if name.endswith(".pdf") or mime == "application/pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(raw))
+            return "\n\n".join((page.extract_text() or "") for page in reader.pages)[:60000]
+        except ImportError:
+            raise ValueError("PDF reading needs the pypdf package. Add pypdf to requirements.txt and redeploy.")
+        except Exception as exc:
+            raise ValueError(f"Could not read PDF: {exc}")
+    if name.endswith(".docx") or mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(raw))
+            return "\n".join(p.text for p in doc.paragraphs)[:60000]
+        except ImportError:
+            raise ValueError("DOCX reading needs python-docx. Add python-docx to requirements.txt and redeploy.")
+        except Exception as exc:
+            raise ValueError(f"Could not read DOCX: {exc}")
+    raise ValueError("Supported documents: TXT, MD, CSV, JSON, PDF, and DOCX.")
 
 
 def rename_conversation(conversation_id, user_id, title):
@@ -883,7 +952,7 @@ button:disabled{
 
 <aside id="sidebar">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 8px 14px">
-        <strong style="font-size:22px">Dax</strong><span style="opacity:.55;font-size:13px">AI assistant</span>
+        <strong style="font-size:22px">Daxx</strong><span style="opacity:.55;font-size:13px">AI assistant</span>
     </div>
     <button id="closeHistory" onclick="closeHistory()">✕ Close</button>
     <button class="side-tool" onclick="openPopout('search')">🔎 Search</button>
@@ -910,7 +979,7 @@ button:disabled{
 <section id="main">
 
 <header style="position:relative">
-    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Dax</span><span id="webModeNote">Web</span></div>
+    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Daxx</span><span id="webModeNote">Web</span></div>
     <div id="topbar-actions">
         <button class="topbar-btn" id="topVoiceButton" onclick="toggleRecording()" aria-label="Voice" title="Voice">
             <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
@@ -927,6 +996,7 @@ button:disabled{
         <button onclick="shareCurrentChat()">↗️ Share chat</button>
         <button onclick="renameCurrentChat()">✏️ Rename chat</button>
         <button onclick="findInChat()">🔎 Find in chat</button>
+        <button onclick="toggleVoiceReplies()">🔊 Voice replies: <span id="voiceReplyState">Off</span></button>
         <button onclick="readLastReply()">🔊 Read last reply</button>
         <button onclick="newChat();closeChatMore()">＋ New chat</button>
         <button onclick="deleteCurrentChat()" style="color:#ff8f8f">🗑️ Delete chat</button>
@@ -981,17 +1051,21 @@ button:disabled{
         <button class="attachment-option" type="button" onclick="chooseEditImage()">
             <span>✏️</span><span>Edit a photo</span>
         </button>
+        <button class="attachment-option" type="button" onclick="chooseDocument()">
+            <span>📄</span><span>Add document</span>
+        </button>
         <button class="attachment-option" type="button" onclick="takePhoto()">
             <span>📷</span><span>Take a photo</span>
         </button>
     </div>
     <input id="chatImageInput" type="file" accept="image/*" multiple hidden>
+    <input id="chatDocumentInput" type="file" accept=".txt,.md,.csv,.json,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden>
     <div id="attachmentPreview"></div>
     <div class="composer">
         <button id="imageButton" class="icon-button" type="button" onclick="toggleAttachmentMenu()" aria-label="Add photos and files" title="Add photos and files">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <textarea id="message" rows="1" placeholder="Message Dax..." autocomplete="off" enterkeyhint="enter"></textarea>
+        <textarea id="message" rows="1" placeholder="Message Daxx..." autocomplete="off" enterkeyhint="enter"></textarea>
         <button id="micButton" class="icon-button" type="button" onclick="toggleRecording()" aria-label="Voice conversation" title="Voice">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
         </button>
@@ -1018,7 +1092,9 @@ const micButton=document.getElementById("micButton");
 const sendButton=document.getElementById("sendButton");
 const statusBox=document.getElementById("status");
 const chatImageInput=document.getElementById("chatImageInput");
+const chatDocumentInput=document.getElementById("chatDocumentInput");
 const attachmentMenu=document.getElementById("attachmentMenu");
+let chatDocumentFiles=[];
 const attachmentPreview=document.getElementById("attachmentPreview");
 let chatImageFiles=[];
 let chatImageMode="analyze";
@@ -1165,6 +1241,17 @@ function removeTyping(){
 function autoResize(){
     messageInput.style.height="auto";
     messageInput.style.height=Math.min(messageInput.scrollHeight,150)+"px";
+}
+
+function toggleVoiceReplies(){
+    const on=localStorage.getItem("daxxVoiceReplies")==="1";
+    localStorage.setItem("daxxVoiceReplies",on?"0":"1");
+    updateVoiceReplyState();
+    if(!on) setStatus("Voice replies enabled.");
+}
+function updateVoiceReplyState(){
+    const el=document.getElementById("voiceReplyState");
+    if(el) el.textContent=localStorage.getItem("daxxVoiceReplies")==="1"?"On":"Off";
 }
 
 function speak(text){
@@ -1449,11 +1536,14 @@ async function sendMessage(textFromVoice=null){
 
     const filesForThisTurn=[...chatImageFiles];
     const imageModeForThisTurn=chatImageMode;
+    const documentsForThisTurn=[...chatDocumentFiles];
     addMessage(text,"user");
 
     messageInput.value="";
     chatImageFiles=[];
     chatImageInput.value="";
+    chatDocumentFiles=[];
+    chatDocumentInput.value="";
     attachmentPreview.innerHTML="";
     attachmentPreview.style.display="none";
 
@@ -1471,6 +1561,9 @@ async function sendMessage(textFromVoice=null){
         if(filesForThisTurn.length){
             filesForThisTurn.forEach(f=>form.append("images",f));
             form.append("image_mode",imageModeForThisTurn);
+        }
+        if(documentsForThisTurn.length){
+            documentsForThisTurn.forEach(f=>form.append("documents",f));
         }
         const response=await fetch("/chat",{method:"POST",body:form});
 
@@ -1497,9 +1590,8 @@ async function sendMessage(textFromVoice=null){
 
         removeTyping();
         addMessage(data.reply,"alpha");
+        if(localStorage.getItem("daxxVoiceReplies")==="1") speak(data.reply);
 
-        // Dax does NOT read replies automatically.
-        // Use the "🔊 Read aloud" button on a reply when requested.
         setStatus("");
 
         await loadHistory();
@@ -1547,6 +1639,20 @@ function takePhoto(){
     chatImageInput.click();
 }
 
+function chooseDocument(){
+    attachmentMenu.style.display="none";
+    chatDocumentInput.click();
+}
+function updateDocumentPreview(){
+    chatDocumentFiles=Array.from(chatDocumentInput.files||[]).slice(0,3);
+    const names=chatDocumentFiles.map(f=>f.name).join(", ");
+    if(chatDocumentFiles.length){
+        attachmentPreview.style.display="block";
+        attachmentPreview.innerHTML=`<span>${chatDocumentFiles.length} document${chatDocumentFiles.length===1?"":"s"} attached: ${escapeHtml(names)}</span>`;
+    }
+}
+chatDocumentInput.addEventListener("change",updateDocumentPreview);
+
 function updateChatImagePreview(){
     chatImageFiles=Array.from(chatImageInput.files||[]).slice(0,3);
     attachmentPreview.innerHTML="";
@@ -1561,6 +1667,7 @@ function updateChatImagePreview(){
 }
 
 chatImageInput.addEventListener("change",updateChatImagePreview);
+updateVoiceReplyState();
 document.addEventListener("click",e=>{
     if(!attachmentMenu.contains(e.target) && e.target!==document.getElementById("imageButton")){ attachmentMenu.style.display="none"; }
 });
@@ -2239,26 +2346,26 @@ def history():
     })
 
 
+def attachments_api_payload(rows):
+    return [{"message_id":r[0],"kind":r[1],"filename":r[2],"mime_type":r[3],"data_url":r[4],"text_content":r[5]} for r in rows]
+
+
 @app.route("/history/<int:conversation_id>")
 @login_required_api
 def history_chat(conversation_id):
 
     user_id = get_current_user_id()
 
-    rows=get_messages(
-        conversation_id,
-        user_id
-    )
-
+    rows=get_messages(conversation_id, user_id)
+    attachments = get_message_attachments(conversation_id, user_id)
+    by_message = {}
+    for mid, kind, filename, mime, data_url, text_content in attachments:
+        by_message.setdefault(mid, []).append({"kind":kind,"filename":filename,"mime_type":mime,"data_url":data_url,"text_content":text_content})
+    # get_messages intentionally stays compatible with the older 3-column shape;
+    # attachment display is also exposed through a lightweight separate endpoint.
     return jsonify({
-        "messages":[
-            {
-                "role":r[0],
-                "content":r[1],
-                "created_at":r[2]
-            }
-            for r in rows
-        ]
+        "messages":[{"role":r[0],"content":r[1],"created_at":r[2]} for r in rows],
+        "attachments":attachments_api_payload(attachments)
     })
 
 
@@ -2324,6 +2431,27 @@ def projects_api():
     return jsonify({"projects":[{"id":r[0],"name":r[1],"icon":r[2],"created_at":r[3]} for r in rows]})
 
 
+@app.route("/projects/<int:project_id>/chats", methods=["GET", "POST"])
+@login_required_api
+def project_chats_api(project_id):
+    user_id=get_current_user_id()
+    conn=db_connect()
+    project=conn.execute("SELECT id FROM dax_projects WHERE id=? AND user_id=?",(project_id,str(user_id))).fetchone()
+    if not project:
+        conn.close(); return jsonify({"error":"Project not found."}),404
+    if request.method=="POST":
+        data=request.get_json(silent=True) or {}
+        cid=data.get("conversation_id")
+        try: cid=int(cid)
+        except Exception: conn.close(); return jsonify({"error":"Invalid chat id."}),400
+        ok=conn.execute("SELECT id FROM conversations WHERE id=? AND user_id=?",(cid,user_id)).fetchone()
+        if not ok: conn.close(); return jsonify({"error":"Chat not found."}),404
+        conn.execute("INSERT OR IGNORE INTO dax_project_chats(project_id,conversation_id) VALUES(?,?)",(project_id,cid)); conn.commit()
+    rows=conn.execute("""SELECT c.id,c.title,c.created_at FROM conversations c JOIN dax_project_chats pc ON pc.conversation_id=c.id WHERE pc.project_id=? AND c.user_id=? ORDER BY c.id DESC""",(project_id,user_id)).fetchall()
+    conn.close()
+    return jsonify({"chats":[{"id":r[0],"title":r[1],"created_at":r[2]} for r in rows]})
+
+
 @app.route("/plugins")
 @login_required_api
 def plugins_api():
@@ -2378,6 +2506,7 @@ def chat():
         data = request.form.to_dict()
     user_message = str(data.get("message", "")).strip()
     chat_images = [f for f in request.files.getlist("images") if f and f.filename]
+    chat_documents = [f for f in request.files.getlist("documents") if f and f.filename]
     image_mode = str(data.get("image_mode", "analyze"))
     if len(chat_images) > 3:
         return jsonify({"error":"You can attach up to 3 images for analysis."}), 400
@@ -2414,7 +2543,27 @@ def chat():
                 save_memory(user_id, memory_text)
             break
 
-    save_message(conversation_id, "user", user_message)
+    user_message_id = save_message(conversation_id, "user", user_message)
+
+    # Persist uploaded images/documents so they remain visible in the conversation.
+    persisted_image_parts = []
+    for f in chat_images[:3]:
+        raw = f.read()
+        if not raw: continue
+        mime = f.mimetype or "image/jpeg"
+        if mime not in ("image/jpeg","image/png","image/gif","image/webp"): continue
+        encoded = base64.b64encode(raw).decode("utf-8")
+        data_url = f"data:{mime};base64,{encoded}"
+        save_attachment(user_id, conversation_id, user_message_id, "image", f.filename or "image", mime, data_url=data_url)
+        persisted_image_parts.append({"type":"image_url","image_url":{"url":data_url}})
+    document_context = []
+    for f in chat_documents[:3]:
+        try:
+            extracted = extract_document_text(f)
+            save_attachment(user_id, conversation_id, user_message_id, "document", f.filename or "document", f.mimetype or "application/octet-stream", text_content=extracted)
+            document_context.append(f"DOCUMENT: {f.filename}\n{extracted}")
+        except ValueError as exc:
+            return jsonify({"error":str(exc)}),400
 
     rows = get_messages(conversation_id, user_id)
     memories = get_memories(user_id)
@@ -2456,27 +2605,20 @@ the supplied conversation or memory context.
                 "content": content
             })
 
-    # Current-turn image understanding. Groq's Qwen 3.8 27B accepts up to
-    # three image inputs and can read screenshots, UI text, documents and photos.
+    # Current-turn image/document understanding. Persisted image data also lets
+    # later turns in the same conversation keep access to earlier images.
     current_user_content = user_message
-    if chat_images:
-        if image_mode == "analyze":
+    if persisted_image_parts or document_context:
+        if persisted_image_parts and image_mode == "analyze":
             current_user_content = (
                 "Analyze the attached image(s) carefully. Read visible text/OCR, "
                 "inspect the UI or scene, identify errors and explain concrete "
                 "fixes when the user asks for troubleshooting. Do not pretend "
                 "you can see anything that is not visible.\n\n" + user_message
             )
-        parts = [{"type":"text","text":current_user_content}]
-        for f in chat_images:
-            raw = f.read()
-            if not raw: continue
-            mime = f.mimetype or "image/jpeg"
-            if mime not in ("image/jpeg","image/png","image/gif","image/webp"):
-                continue
-            encoded = base64.b64encode(raw).decode("utf-8")
-            parts.append({"type":"image_url","image_url":{"url":f"data:{mime};base64,{encoded}"}})
-        # Replace the just-saved text-only user message in the provider context.
+        if document_context:
+            current_user_content += "\n\n" + "\n\n".join(document_context)
+        parts = [{"type":"text","text":current_user_content}] + persisted_image_parts
         messages[-1] = {"role":"user","content":parts}
 
     force_web = str(request.form.get("force_web", "0")).lower() in ("1","true","yes","on") if request.form else False
