@@ -1231,8 +1231,8 @@ async function editImage(){
 
     setStatus(
         files.length === 1
-            ? "🎨 Editing your photo..."
-            : `🎨 Combining ${files.length} reference photos into one image...`
+            ? "🎯 Localized photo editing..."
+            : `🎯 Editing with ${files.length} reference photos...`
     );
 
     const button=document.getElementById("editButton");
@@ -2337,8 +2337,12 @@ def image_edit():
     """
     Dax image editor.
 
-    Primary image model: Google Gemini 3.1 Flash Image (Nano Banana 2),
-    which is designed for high-quality image editing and multiple reference-image workflows.
+    Primary image model: Google Gemini 3 Pro Image (Nano Banana Pro),
+    optimized for professional-grade image editing and complex instructions.
+
+    Editing strategy: semantic localized editing. The prompt explicitly defines
+    the edit mask so Gemini is instructed to change only the requested region
+    and leave everything else untouched.
     """
 
     prompt = str(request.form.get("prompt", "")).strip()
@@ -2436,33 +2440,93 @@ Natural professional photography, realistic human skin and hair, physically corr
 """.strip()
 
     # ------------------------------------------------------------------
-    # PRIMARY: Gemini 3.1 Flash Image / Nano Banana Pro
+    # PRIMARY: Gemini 3 Pro Image / Nano Banana Pro
     # ------------------------------------------------------------------
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
-            gemini_input = [{"type": "text", "text": final_prompt}] + image_parts
-            payload = {
-                "model": "gemini-3.1-flash-image",
-                "input": gemini_input,
-                "response_format": {
-                    "type": "image",
-                    "mime_type": "image/jpeg",
-                    "image_size": "4K"
-                },
-                "generation_config": {
-                    "thinking_level": "high"
+            # Gemini's documented "inpainting (semantic masking)" workflow is
+            # conversational: describe exactly what is inside the edit mask and
+            # explicitly protect everything outside it.
+            if len(image_parts) == 1:
+                source_w, source_h = source.size
+                ratio = source_w / source_h if source_h else 1.0
+                ratios = {
+                    "1:1": 1.0, "2:3": 2/3, "3:2": 3/2,
+                    "3:4": 3/4, "4:3": 4/3, "4:5": 4/5,
+                    "5:4": 5/4, "9:16": 9/16, "16:9": 16/9,
+                    "21:9": 21/9,
                 }
+                aspect_ratio = min(ratios, key=lambda k: abs(ratios[k] - ratio))
+            else:
+                aspect_ratio = None
+
+            localized_prompt = f"""
+You are Dax, a professional photographic retouching and image-editing system.
+
+SOURCE IMAGE RULE:
+The supplied image is a REAL PHOTOGRAPH. Perform a localized photographic edit.
+Do not redraw, recompose, reinterpret, restyle, or regenerate the whole photograph.
+
+USER REQUEST:
+{prompt}
+
+SEMANTIC EDIT MASK:
+Treat ONLY the people, objects, surfaces, or background elements explicitly named
+in the USER REQUEST as being inside the edit mask. Everything not explicitly named
+is outside the mask and MUST remain visually unchanged.
+
+OUTSIDE THE MASK — PRESERVE:
+- Exact face identity, facial structure, age appearance and natural skin texture.
+- Exact body proportions, pose, hands, fingers, hairstyle and clothing unless named.
+- Original background, architecture, trees, walls, furniture and environment unless named.
+- Original camera angle, framing, perspective, lens character, depth of field and composition.
+- Original photographic grain, exposure and natural imperfections.
+- Do not invent, remove, duplicate or rearrange unrelated objects.
+
+INSIDE THE MASK — EDIT ONLY AS REQUESTED:
+Make the requested change naturally and photographically. Match the surrounding
+lighting, color, shadows, perspective, texture, focus and camera characteristics.
+Blend the edited area seamlessly into the unchanged pixels around it.
+
+PHOTOGRAPHIC REALISM:
+The final result must look like a real photograph captured by a real camera.
+Use natural pores, fine hair, fabric texture, realistic skin variation, physically
+correct shadows and believable optical detail. No cartoon, anime, illustration,
+painting, CGI, 3D render, plastic skin, waxy skin, beauty-filter look, airbrushing,
+synthetic outlines, painterly texture, or AI-avatar appearance.
+
+IMPORTANT:
+If the request does not require changing a particular part of the photograph,
+DO NOT change it. Preserve it exactly as much as possible.
+Return ONE finished photograph, not a collage or split image.
+""".strip()
+
+            # Google documents image editing with the image input and text prompt;
+            # for semantic masking the instruction defines the region to change.
+            gemini_input = image_parts + [{"type": "text", "text": localized_prompt}]
+            response_format = {
+                "type": "image",
+                "mime_type": "image/jpeg",
+                "image_size": "4K",
+            }
+            if aspect_ratio:
+                response_format["aspect_ratio"] = aspect_ratio
+
+            payload = {
+                "model": "gemini-3-pro-image",
+                "input": gemini_input,
+                "response_format": response_format,
             }
 
             response = requests.post(
                 "https://generativelanguage.googleapis.com/v1beta/interactions",
                 headers={
                     "x-goog-api-key": gemini_key,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=300
+                timeout=300,
             )
 
             if response.ok:
@@ -2470,7 +2534,6 @@ Natural professional photography, realistic human skin and hair, physically corr
                 b64_image = None
                 mime_type = "image/jpeg"
 
-                # Current Interactions API: steps[].content[].type == image
                 for step in data.get("steps", []) or []:
                     for block in step.get("content", []) or []:
                         if block.get("type") == "image" and block.get("data"):
@@ -2480,28 +2543,24 @@ Natural professional photography, realistic human skin and hair, physically corr
                     if b64_image:
                         break
 
-                # Also tolerate the convenience-style output_image wrapper.
                 if not b64_image:
-                    out = data.get("output_image") or {}
-                    b64_image = out.get("data")
-                    mime_type = out.get("mime_type") or mime_type
+                    out_image = data.get("output_image") or {}
+                    b64_image = out_image.get("data")
+                    mime_type = out_image.get("mime_type") or mime_type
 
                 if b64_image:
                     return jsonify({
                         "success": True,
                         "image_url": f"data:{mime_type};base64,{b64_image}",
-                        "model": "gemini-3.1-flash-image",
-                        "reference_count": len(image_parts)
+                        "model": "gemini-3-pro-image",
+                        "reference_count": len(image_parts),
                     })
 
-            # If Gemini is configured, do not silently fall back to the
-            # lower-quality Cloudflare model. Returning the real provider
-            # error makes deployment/debugging possible and prevents a
-            # cartoon-like fallback from being mistaken for Gemini output.
-            detail = response.text[:1200] if response is not None else "unknown error"
+            detail = response.text[:1600] if response is not None else "unknown error"
             return jsonify({
                 "error": f"Gemini image editor failed ({response.status_code if response is not None else 'unknown'}): {detail}"
             }), 502
+
         except requests.Timeout:
             return jsonify({"error": "Gemini image editor timed out. Please try again."}), 504
         except requests.RequestException as exc:
@@ -2509,74 +2568,7 @@ Natural professional photography, realistic human skin and hair, physically corr
         except Exception as exc:
             return jsonify({"error": f"Gemini image editor failed: {exc}"}), 502
     else:
-        gemini_error = "GEMINI_API_KEY is not configured"
-
-    # ------------------------------------------------------------------
-    # FALLBACK: Cloudflare FLUX.2 Klein 4B -- only when Gemini key is absent.
-    # ------------------------------------------------------------------
-    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-    api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
-    if not account_id or not api_token:
-        return jsonify({
-            "error": (
-                "The high-quality Gemini image editor is unavailable and Cloudflare is not configured. "
-                "Add GEMINI_API_KEY to Render, or keep CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN configured."
-            )
-        }), 500
-
-    try:
-        form_data = {"prompt": final_prompt, "width": "1024", "height": "1024"}
-        url = (
-            "https://api.cloudflare.com/client/v4/accounts/"
-            f"{account_id}/ai/run/@cf/black-forest-labs/flux-2-klein-4b"
-        )
-        result = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {api_token}"},
-            data=form_data,
-            files=cloudflare_files,
-            timeout=240
-        )
-        if not result.ok:
-            try:
-                detail = result.json()
-            except Exception:
-                detail = result.text
-            return jsonify({
-                "error": f"Image providers failed. Gemini: {gemini_error}. Cloudflare: {detail}"
-            }), 502
-
-        content_type = result.headers.get("Content-Type", "")
-        b64_image = None
-        if "application/json" in content_type:
-            result_data = result.json()
-            model_result = result_data.get("result") or {}
-            b64_image = model_result.get("image") or result_data.get("image")
-
-        if b64_image:
-            image_url = b64_image if b64_image.startswith("data:image/") else f"data:image/jpeg;base64,{b64_image}"
-        else:
-            raw_output = result.content
-            if not raw_output:
-                return jsonify({"error": "Cloudflare returned no generated image."}), 502
-            encoded = base64.b64encode(raw_output).decode("utf-8")
-            media_type = content_type.split(";")[0] or "image/jpeg"
-            image_url = f"data:{media_type};base64,{encoded}"
-
-        return jsonify({
-            "success": True,
-            "image_url": image_url,
-            "model": "@cf/black-forest-labs/flux-2-klein-4b-fallback",
-            "reference_count": len(cloudflare_files)
-        })
-
-    except requests.Timeout:
-        return jsonify({"error": "Image generation timed out. Please try again."}), 504
-    except requests.RequestException as exc:
-        return jsonify({"error": f"Could not contact image providers: {exc}"}), 502
-    except Exception as exc:
-        return jsonify({"error": f"Image generation failed: {exc}"}), 500
-
+        return jsonify({"error": "GEMINI_API_KEY is not configured on Render."}), 500
 
 if __name__=="__main__":
 
