@@ -75,6 +75,35 @@ def init_db():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dax_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            conversation_id INTEGER,
+            image_url TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT 'Dax image',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dax_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            icon TEXT NOT NULL DEFAULT '📁',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dax_project_chats (
+            project_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL UNIQUE,
+            PRIMARY KEY(project_id, conversation_id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -201,6 +230,65 @@ def conversation_belongs_to_user(conversation_id, user_id):
     return row is not None
 
 
+def save_dax_image(user_id, conversation_id, image_url, title="Dax image"):
+    conn = db_connect()
+    cur = conn.execute(
+        "INSERT INTO dax_images (user_id, conversation_id, image_url, title) VALUES (?, ?, ?, ?)",
+        (str(user_id), conversation_id, image_url, title[:120] or "Dax image")
+    )
+    image_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return image_id
+
+
+def get_dax_images(user_id, limit=60):
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id, conversation_id, image_url, title, created_at FROM dax_images WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        (str(user_id), int(limit))
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_projects(user_id):
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id, name, icon, created_at FROM dax_projects WHERE user_id = ? ORDER BY id DESC",
+        (str(user_id),)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def create_project(user_id, name, icon="📁"):
+    conn = db_connect()
+    cur = conn.execute(
+        "INSERT INTO dax_projects (user_id, name, icon) VALUES (?, ?, ?)",
+        (str(user_id), name[:80] or "New project", icon)
+    )
+    project_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return project_id
+
+
+def search_user_content(user_id, q):
+    conn = db_connect()
+    like = "%" + q + "%"
+    chats = conn.execute(
+        "SELECT id, title, created_at FROM conversations WHERE user_id = ? AND (title LIKE ? OR id IN (SELECT conversation_id FROM messages WHERE content LIKE ?)) ORDER BY id DESC LIMIT 40",
+        (str(user_id), like, like)
+    ).fetchall()
+    images = conn.execute(
+        "SELECT id, title, created_at FROM dax_images WHERE user_id = ? AND title LIKE ? ORDER BY id DESC LIMIT 20",
+        (str(user_id), like)
+    ).fetchall()
+    conn.close()
+    return chats, images
+
+
 init_db()
 
 
@@ -318,7 +406,7 @@ body{
 }
 
 #sidebar{
-    width:280px;
+    width:260px;
     background:#181d25;
     border-right:1px solid #2a303a;
     padding:12px;
@@ -326,51 +414,9 @@ body{
     flex-direction:column
 }
 
-#sidebarBrand{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    padding:8px 8px 16px;
-    font-size:22px;
-    font-weight:700;
-}
-
-#sidebarBrand small{
-    font-size:13px;
-    color:#8f98a6;
-    font-weight:500;
-}
-
-#sidebarTools{
-    display:grid;
-    gap:4px;
-    margin-bottom:12px;
-}
-
-.sidebar-tool{
-    width:100%;
-    height:42px;
-    border-radius:10px;
-    background:transparent;
-    color:#e8ebef;
-    text-align:left;
-    padding:0 12px;
-    font-size:15px;
-    border:0;
-    cursor:pointer;
-}
-
-.sidebar-tool:hover{background:#232831}
-
-#recentLabel{
-    color:#8f98a6;
-    font-size:12px;
-    font-weight:700;
-    padding:10px 10px 7px;
-    text-transform:uppercase;
-    letter-spacing:.4px;
-}
-
+.side-tool{width:100%;height:46px;border-radius:12px;background:transparent;color:#d8dde5;text-align:left;padding:0 12px;margin-bottom:3px;font-size:15px}
+.side-tool:hover{background:#222832}
+.section-label{font-size:11px;font-weight:700;color:#7f8997;padding:16px 10px 8px}
 #newChat{
     width:100%;
     height:46px;
@@ -702,41 +748,6 @@ button:disabled{
     padding:0 12px
 }
 
-.sources-box{
-    margin-top:12px;
-    padding:10px 12px;
-    border:1px solid #2f3641;
-    border-radius:12px;
-    background:#181d25;
-}
-
-.sources-title{
-    font-size:13px;
-    font-weight:700;
-    color:#dfe4eb;
-    margin-bottom:7px;
-}
-
-.source-item{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    padding:7px 0;
-    border-top:1px solid #292f38;
-}
-
-.source-item:first-of-type{border-top:0}
-
-.source-item a{
-    color:#9fc7ff;
-    text-decoration:none;
-    font-size:13px;
-    line-height:1.35;
-    overflow-wrap:anywhere;
-}
-
-.source-item a:hover{text-decoration:underline}
-
 .image-result{
     max-width:100%;
     border-radius:12px;
@@ -766,6 +777,18 @@ button:disabled{
     min-width:44px;
     padding:8px 12px;
 }
+
+#popoutPanel{display:none;position:fixed;inset:0;z-index:1200;background:#11151b;overflow:auto}
+#popoutHeader{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:16px 18px;background:#181d25;border-bottom:1px solid #2a303a}
+#popoutTitle{font-size:19px;font-weight:700;flex:1}
+#popoutClose{width:42px;height:42px;background:#303641;border-radius:50%}
+.popout-content{max-width:900px;margin:0 auto;padding:20px}
+.popout-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+.popout-card{background:#1b2028;border:1px solid #303743;border-radius:14px;padding:14px;color:#fff;text-align:left}
+.popout-card button{width:100%;height:auto;min-height:44px;border-radius:10px;background:#2a3039;text-align:left;padding:10px 12px;font-size:14px}
+.library-img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;display:block;margin-bottom:8px}
+.search-box{width:100%;border-radius:12px;margin-bottom:14px}
+@media(max-width:600px){.popout-content{padding:14px}.popout-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 #historyOverlay{
     display:none;
@@ -797,7 +820,7 @@ button:disabled{
 
 @media(max-width:700px){
     #sidebar{
-        display:flex;
+        display:block;
         position:fixed;
         left:0;
         top:0;
@@ -834,17 +857,17 @@ button:disabled{
 <body>
 
 <aside id="sidebar">
-    <div id="sidebarBrand"><span>Dax</span><small>AI assistant</small></div>
-    <button id="closeHistory" onclick="closeHistory()">✕ Close</button>
-    <div id="sidebarTools">
-        <button class="sidebar-tool" onclick="focusSearch()">🔎 &nbsp;Search</button>
-        <button class="sidebar-tool" onclick="toggleImagePanel();closeHistory()">🖼️ &nbsp;Images</button>
-        <button class="sidebar-tool" onclick="showLibraryNotice()">📚 &nbsp;Library</button>
-        <button class="sidebar-tool" onclick="showProjectNotice()">📁 &nbsp;Projects</button>
-        <button class="sidebar-tool" onclick="showPluginNotice()">◉ &nbsp;Plugins</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 8px 14px">
+        <strong style="font-size:22px">Dax</strong><span style="opacity:.55;font-size:13px">AI assistant</span>
     </div>
-    <div id="recentLabel">Recents</div>
-    <button id="newChat" onclick="newChat();closeHistory()">＋ New chat</button>
+    <button id="closeHistory" onclick="closeHistory()">✕ Close</button>
+    <button class="side-tool" onclick="openPopout('search')">🔎 Search</button>
+    <button class="side-tool" onclick="openPopout('images')">🖼️ Images</button>
+    <button class="side-tool" onclick="openPopout('library')">📚 Library</button>
+    <button class="side-tool" onclick="openPopout('projects')">📁 Projects</button>
+    <button class="side-tool" onclick="openPopout('plugins')">◉ Plugins</button>
+    <div class="section-label">RECENTS</div>
+    <button id="newChat" onclick="newChat()">＋ New chat</button>
     <div id="history"></div>
     <div style="border-top:1px solid #2a303a;padding-top:10px;margin-top:10px">
         <button id="logoutButton" onclick="logout()" style="width:100%;padding:10px;border:1px solid #343b46;border-radius:10px;background:#222832;color:#ddd;cursor:pointer">Log out</button>
@@ -853,9 +876,14 @@ button:disabled{
 
 <div id="historyOverlay" onclick="closeHistory()"></div>
 
+<div id="popoutPanel">
+  <div id="popoutHeader"><div id="popoutTitle">Dax</div><button id="popoutClose" onclick="closePopout()">✕</button></div>
+  <div id="popoutBody" class="popout-content"></div>
+</div>
+
 <section id="main">
 
-<header><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Dax</span></header>
+<header><button id="historyToggle" onclick="toggleHistory()">☰</button>Dax</header>
 
 <div id="chat"></div>
 
@@ -1037,13 +1065,10 @@ function addMessage(text,who){
         bubble.style.textAlign="left";
         div.appendChild(bubble);
     }else{
-        const parsed=splitSources(text);
         const body=document.createElement("div");
         body.className="message-body";
-        body.innerHTML=renderDaxMarkdown(parsed.body);
+        body.innerHTML=renderDaxMarkdown(text);
         div.appendChild(body);
-        const sourcesEl=renderSources(parsed.sources);
-        if(sourcesEl) div.appendChild(sourcesEl);
 
         const actions=document.createElement("div");
         actions.style.marginTop="7px";
@@ -1102,65 +1127,75 @@ function speak(text){
     speechSynthesis.speak(u);
 }
 
-function focusSearch(){
-    const q=prompt("Search your recent Dax chats:");
-    if(!q) return;
-    const items=[...document.querySelectorAll(".history-item")];
-    let found=0;
-    items.forEach(item=>{
-        const match=item.textContent.toLowerCase().includes(q.toLowerCase());
-        item.style.display=match?"block":"none";
-        if(match) found++;
-    });
-    if(!found) alert("No matching recent chat found.");
+function openPopout(kind){
+    const panel=document.getElementById("popoutPanel");
+    const body=document.getElementById("popoutBody");
+    const title=document.getElementById("popoutTitle");
+    panel.style.display="block";
+    closeHistory();
+    body.innerHTML="";
+
+    if(kind==="search") return renderSearchPanel(title,body);
+    if(kind==="images") return renderImagesPanel(title,body);
+    if(kind==="library") return renderLibraryPanel(title,body);
+    if(kind==="projects") return renderProjectsPanel(title,body);
+    if(kind==="plugins") return renderPluginsPanel(title,body);
 }
 
-function showLibraryNotice(){
-    alert("Library is coming next. Your conversations remain available under Recents.");
+function closePopout(){ document.getElementById("popoutPanel").style.display="none"; }
+
+async function renderSearchPanel(title,body){
+    title.textContent="Search";
+    body.innerHTML='<input id="daxSearch" class="search-box" placeholder="Search your chats, images and projects..." autofocus><div id="searchResults"></div>';
+    const input=document.getElementById("daxSearch");
+    input.oninput=async()=>{
+        const q=input.value.trim(); const box=document.getElementById("searchResults");
+        if(!q){box.innerHTML='<div style="opacity:.6">Search your Dax history.</div>';return;}
+        const r=await fetch('/search?q='+encodeURIComponent(q)); const d=await r.json();
+        box.innerHTML='';
+        (d.chats||[]).forEach(c=>{const b=document.createElement('button');b.className='popout-card';b.textContent='💬 '+c.title;b.onclick=()=>{closePopout();openChat(c.id)};box.appendChild(b)});
+        (d.images||[]).forEach(i=>{const b=document.createElement('button');b.className='popout-card';b.textContent='🖼️ '+i.title;box.appendChild(b)});
+        if(!box.children.length) box.innerHTML='<div style="opacity:.6">No results.</div>';
+    };
+    input.focus();
 }
 
-function showProjectNotice(){
-    alert("Projects are coming next. Dax is keeping your existing chats safe.");
+async function renderImagesPanel(title,body){
+    title.textContent="Images";
+    body.innerHTML='<div style="opacity:.7;margin-bottom:16px">Images created with Dax appear here.</div><div id="imageGrid" class="popout-grid"></div>';
+    const r=await fetch('/images'); const d=await r.json(); const grid=document.getElementById('imageGrid');
+    (d.images||[]).forEach(i=>{const card=document.createElement('div');card.className='popout-card';card.innerHTML='<img class="library-img" src="'+i.image_url+'"><div>'+escapeHtml(i.title)+'</div><a href="'+i.image_url+'" download="dax-image.jpg" style="display:block;margin-top:8px;color:#8ab4ff">Save image</a>';grid.appendChild(card)});
+    if(!grid.children.length) grid.innerHTML='<div style="opacity:.6">No generated images yet.</div>';
 }
 
-function showPluginNotice(){
-    alert("Plugins are coming next. Dax currently uses its built-in tools and web search.");
+async function renderLibraryPanel(title,body){
+    title.textContent="Library";
+    body.innerHTML='<div style="opacity:.7;margin-bottom:16px">Your saved Dax images and files.</div><div id="libraryGrid" class="popout-grid"></div>';
+    const r=await fetch('/images'); const d=await r.json(); const grid=document.getElementById('libraryGrid');
+    (d.images||[]).forEach(i=>{const card=document.createElement('div');card.className='popout-card';card.innerHTML='<img class="library-img" src="'+i.image_url+'"><div>'+escapeHtml(i.title)+'</div>';grid.appendChild(card)});
+    if(!grid.children.length) grid.innerHTML='<div style="opacity:.6">Library is empty. Generated images will be saved here.</div>';
 }
 
-function renderSources(sources){
-    if(!Array.isArray(sources)||!sources.length) return null;
-    const box=document.createElement("div");
-    box.className="sources-box";
-    const title=document.createElement("div");
-    title.className="sources-title";
-    title.textContent="Sources";
-    box.appendChild(title);
-    sources.slice(0,8).forEach(source=>{
-        if(!source || !source.url) return;
-        const row=document.createElement("div");
-        row.className="source-item";
-        const a=document.createElement("a");
-        a.href=source.url;
-        a.target="_blank";
-        a.rel="noopener noreferrer";
-        a.textContent=source.title||source.url;
-        row.appendChild(a);
-        box.appendChild(row);
-    });
-    return box;
+async function renderProjectsPanel(title,body){
+    title.textContent="Projects";
+    body.innerHTML='<button style="width:100%;height:46px;border-radius:12px;background:#2a6df4;margin-bottom:16px" onclick="createDaxProject()">＋ New project</button><div id="projectGrid" class="popout-grid"></div>';
+    const r=await fetch('/projects'); const d=await r.json(); const grid=document.getElementById('projectGrid');
+    (d.projects||[]).forEach(p=>{const card=document.createElement('div');card.className='popout-card';card.innerHTML='<div style="font-size:28px">'+p.icon+'</div><strong>'+escapeHtml(p.name)+'</strong><div style="opacity:.6;font-size:12px;margin-top:5px">Project space</div>';grid.appendChild(card)});
+    if(!grid.children.length) grid.innerHTML='<div style="opacity:.6">Create a project to keep related chats together.</div>';
 }
 
-function splitSources(text){
-    const marker="\n\n**Sources**\n";
-    const idx=text.indexOf(marker);
-    if(idx<0) return {body:text,sources:[]};
-    const body=text.slice(0,idx);
-    const tail=text.slice(idx+marker.length);
-    const sources=[];
-    const re=/- \[(.*?)\]\((https?:\/\/[^\s)]+)\)/g;
-    let m;
-    while((m=re.exec(tail))!==null) sources.push({title:m[1],url:m[2]});
-    return {body,sources};
+async function createDaxProject(){
+    const name=prompt('Project name'); if(!name) return;
+    const r=await fetch('/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    if(!r.ok){alert('Could not create project.');return;}
+    renderProjectsPanel(document.getElementById('popoutTitle'),document.getElementById('popoutBody'));
+}
+
+async function renderPluginsPanel(title,body){
+    title.textContent="Plugins";
+    body.innerHTML='<div style="opacity:.7;margin-bottom:16px">Tools available to Dax.</div><div id="pluginGrid" class="popout-grid"></div>';
+    const r=await fetch('/plugins'); const d=await r.json(); const grid=document.getElementById('pluginGrid');
+    (d.plugins||[]).forEach(p=>{const card=document.createElement('div');card.className='popout-card';card.innerHTML='<div style="font-size:28px">'+p.icon+'</div><strong>'+escapeHtml(p.name)+'</strong><div style="opacity:.65;font-size:13px;margin-top:6px">'+escapeHtml(p.description)+'</div>';grid.appendChild(card)});
 }
 
 function toggleHistory(){
@@ -2043,6 +2078,51 @@ def history_chat(conversation_id):
     })
 
 
+@app.route("/search")
+@login_required_api
+def search_content():
+    q = str(request.args.get("q", "")).strip()
+    if not q:
+        return jsonify({"chats": [], "images": []})
+    chats, images = search_user_content(get_current_user_id(), q)
+    return jsonify({
+        "chats": [{"id": r[0], "title": r[1], "created_at": r[2]} for r in chats],
+        "images": [{"id": r[0], "title": r[1], "created_at": r[2]} for r in images]
+    })
+
+
+@app.route("/images")
+@login_required_api
+def images_library():
+    rows = get_dax_images(get_current_user_id())
+    return jsonify({"images": [{"id":r[0], "conversation_id":r[1], "image_url":r[2], "title":r[3], "created_at":r[4]} for r in rows]})
+
+
+@app.route("/projects", methods=["GET", "POST"])
+@login_required_api
+def projects_api():
+    user_id = get_current_user_id()
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return jsonify({"error":"Enter a project name."}), 400
+        pid = create_project(user_id, name, str(data.get("icon", "📁")))
+        return jsonify({"id":pid, "name":name, "icon":str(data.get("icon", "📁"))})
+    rows = get_projects(user_id)
+    return jsonify({"projects":[{"id":r[0],"name":r[1],"icon":r[2],"created_at":r[3]} for r in rows]})
+
+
+@app.route("/plugins")
+@login_required_api
+def plugins_api():
+    return jsonify({"plugins":[
+        {"id":"web-search","name":"Web Search","icon":"🌐","description":"Search the web and return source links."},
+        {"id":"image-editor","name":"Image Editor","icon":"🖼️","description":"Edit and transform uploaded photos."},
+        {"id":"voice","name":"Voice","icon":"🎙️","description":"Record a message and transcribe it."}
+    ]})
+
+
 @app.route("/chat", methods=["POST"])
 @login_required_api
 def chat():
@@ -2324,40 +2404,42 @@ the supplied conversation or memory context.
             "error": "Dax received an empty response."
         }), 502
 
-    # Groq browser_search can expose the search results used by the model.
-    # Keep the sources in the chat so Dax can display clickable references.
+    # Groq browser_search returns executed_tools on the assistant message.
+    # Keep the verified URLs so Dax can show a real Sources section.
     if use_web and result_provider == "groq":
-        executed_tools = message_obj.get("executed_tools") or []
         sources = []
+        executed_tools = (message_obj.get("executed_tools") or
+                          result_data.get("executed_tools") or [])
 
-        def collect_search_items(value):
+        def collect_sources(value):
             if isinstance(value, dict):
-                for key in ("search_results", "results"):
-                    nested = value.get(key)
-                    if isinstance(nested, (list, dict)):
-                        yield from collect_search_items(nested)
+                # Search result objects are normally {title, url, ...}.
                 url = value.get("url") or value.get("link")
-                title = value.get("title") or value.get("name") or value.get("source") or url
+                title = value.get("title") or value.get("name") or url
                 if url and isinstance(url, str) and url.startswith(("http://", "https://")):
-                    yield (str(title or url), url)
-                for key, nested in value.items():
-                    if key not in {"search_results", "results", "url", "link", "title", "name", "source"}:
-                        if isinstance(nested, (dict, list)):
-                            yield from collect_search_items(nested)
+                    pair = (str(title), url)
+                    if pair not in sources:
+                        sources.append(pair)
+                for child in value.values():
+                    collect_sources(child)
             elif isinstance(value, list):
-                for nested in value:
-                    yield from collect_search_items(nested)
+                for child in value:
+                    collect_sources(child)
 
-        for tool in executed_tools:
-            for title, url in collect_search_items(tool):
-                pair = (title, url)
-                if pair not in sources:
-                    sources.append(pair)
+        collect_sources(executed_tools)
+
+        # Some Groq responses include citation URLs directly in the final
+        # message. Preserve those as sources as well.
+        import re
+        for url in re.findall(r'https?://[^\s)\]<>]+', reply):
+            clean = url.rstrip('.,;')
+            if clean and not any(u == clean for _, u in sources):
+                sources.append((clean, clean))
 
         if sources:
             reply += "\n\n**Sources**\n" + "\n".join(
                 f"- [{title}]({url})"
-                for title, url in sources[:5]
+                for title, url in sources[:8]
             )
 
     save_message(
@@ -2739,8 +2821,16 @@ MULTI-PHOTO EDITING RULES:
             media_type = content_type.split(";")[0] or "image/jpeg"
             image_url = f"data:{media_type};base64,{encoded}"
 
+        image_id = save_dax_image(
+            get_current_user_id(),
+            None,
+            image_url,
+            "Dax generated image"
+        )
+
         return jsonify({
             "success": True,
+            "image_id": image_id,
             "image_url": image_url,
             "model": "@cf/black-forest-labs/flux-2-klein-9b",
             "reference_count": len(multipart_files),
