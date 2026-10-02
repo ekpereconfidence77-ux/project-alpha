@@ -2443,9 +2443,9 @@ Natural professional photography, realistic human skin and hair, physically corr
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
-            gemini_input = image_parts + [{"type": "text", "text": final_prompt}]
+            gemini_input = [{"type": "text", "text": final_prompt}] + image_parts
             payload = {
-                "model": "gemini-3-pro-image",
+                "model": "gemini-3.1-flash-image",
                 "input": gemini_input,
                 "response_format": {
                     "type": "image",
@@ -2489,7 +2489,7 @@ Natural professional photography, realistic human skin and hair, physically corr
                     return jsonify({
                         "success": True,
                         "image_url": f"data:{mime_type};base64,{b64_image}",
-                        "model": "gemini-3-pro-image",
+                        "model": "gemini-3.1-flash-image",
                         "reference_count": len(image_parts)
                     })
 
