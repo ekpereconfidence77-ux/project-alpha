@@ -2337,7 +2337,7 @@ def image_edit():
     """
     Dax image editor.
 
-    Primary image model: Google Gemini 3.1 Flash Image (Nano Banana 2),
+    Primary image model: Google Gemini 3 Pro Image (Nano Banana Pro),
     which is designed for conversational image editing and multiple
     reference-image workflows. Cloudflare FLUX.2 Klein remains as a
     fallback when GEMINI_API_KEY is not configured or Gemini is unavailable.
@@ -2410,32 +2410,42 @@ MULTI-PHOTO EDIT:
 """.strip()
 
     final_prompt = f"""
-You are Dax's professional photorealistic photo editor.
-Create the final image as if it were captured by a real professional camera, not drawn or illustrated.
-Use the supplied photograph(s) as visual references and follow the user's instruction precisely.
+You are Dax, a professional real-photo editing system.
+The supplied image is a REAL PHOTOGRAPH. Your job is to EDIT that photograph, not redraw it.
 
-USER INSTRUCTION:
+USER REQUEST:
 {prompt}
 
 {edit_rules}
 
-PHOTOREALISM STANDARD:
-- Photographic realism is mandatory.
-- Preserve natural facial identity and realistic anatomy.
-- Use physically plausible lighting, shadows, skin texture, lens depth of field and color.
-- Do not add creative changes that the user did not request.
-- The output must look like a genuine photograph, not an AI illustration.
+STRICT PHOTO-PRESERVATION RULES:
+- Treat the first supplied photo as the base photograph unless the user explicitly asks to combine photos.
+- Preserve the person's exact real facial identity, age appearance, skin tone, body proportions, hands, hair, clothing, camera perspective, and natural asymmetry unless the user explicitly requests a change.
+- Preserve the original photographic detail and texture: real pores, fine hair, fabric weave, natural skin variation, realistic edges and imperfections.
+- Make only the changes requested by the user. Do not redesign the person or invent a new person.
+- Match the original lens perspective, exposure, white balance, shadows, reflections, depth of field and photographic grain.
+- If the request is a simple edit, keep the original composition and most pixels visually unchanged.
+- If a reference image is provided for identity, use it only for the requested identity/feature transfer; do not copy its art style.
+
+ANTI-ILLUSTRATION RULES:
+- The result MUST look like an untouched photograph taken with a real camera.
+- NEVER produce a drawing, painting, cartoon, anime, 3D render, CGI, digital illustration, plastic skin, waxy face, airbrushed skin, or beauty-filter look.
+- Do not use painterly brushwork, artificial outlines, cel shading, exaggerated facial symmetry, oversharpening, or smooth synthetic skin.
+- Do not make the image look like an AI portrait or game character.
+
+QUALITY TARGET:
+Natural professional photography, realistic human skin and hair, physically correct lighting, authentic camera optics, subtle real-world imperfections, high detail, and faithful preservation of the supplied photograph.
 """.strip()
 
     # ------------------------------------------------------------------
-    # PRIMARY: Gemini 3.1 Flash Image / Nano Banana 2
+    # PRIMARY: Gemini 3.1 Flash Image / Nano Banana Pro
     # ------------------------------------------------------------------
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
             gemini_input = image_parts + [{"type": "text", "text": final_prompt}]
             payload = {
-                "model": "gemini-3.1-flash-image",
+                "model": "gemini-3-pro-image",
                 "input": gemini_input,
                 "response_format": {
                     "type": "image",
@@ -2479,7 +2489,7 @@ PHOTOREALISM STANDARD:
                     return jsonify({
                         "success": True,
                         "image_url": f"data:{mime_type};base64,{b64_image}",
-                        "model": "gemini-3.1-flash-image",
+                        "model": "gemini-3-pro-image",
                         "reference_count": len(image_parts)
                     })
 
