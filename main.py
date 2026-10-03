@@ -3426,8 +3426,16 @@ def _make_identity_reference(raw: bytes) -> bytes:
 
 def _build_image_edit_prompt(user_prompt, single_photo):
     if single_photo:
-        rules = "\n".join([
-            "SINGLE-PHOTO EDITING RULES:",
-            "- The first supplied image is the full original photo and is the primary composition/source reference.",
-            "- If image 1 is present, it is an identity-only crop made fro
-Preview truncated for large file
+       rules = "\n".join([
+    "SINGLE-PHOTO EDITING RULES:",
+    "- The first supplied image is the full original photo and is the primary composition/source reference.",
+    "- If image 1 is present, it is an identity-only crop made from the same original photo.",
+    "- Never treat image 1 as a second person or duplicate subject.",
+    "- Preserve the person's recognizable identity: face shape, eyes, eyebrows, nose, lips, cheeks, jaw, chin, ears, hairline, skin tone, natural asymmetry, facial hair, and skin texture.",
+    "- Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.",
+    "- Make only the changes requested by the user; do not invent additional changes.",
+    "- If a face swap is explicitly requested, use the supplied identity reference and blend it naturally into the target.",
+    "- Keep realistic skin texture, lighting, perspective, shadows, highlights, and photographic detail.",
+    "- Do not duplicate the subject, split the image, create a collage, or place the source beside the result.",
+    "- Produce exactly ONE coherent final photograph.",
+]) 
