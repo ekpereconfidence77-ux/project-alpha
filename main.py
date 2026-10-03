@@ -3424,11 +3424,10 @@ def _make_identity_reference(raw: bytes) -> bytes:
         raise ValueError(f"Could not create identity reference: {exc}") from exc
 
 
-def _build_image_edit_prompt(user_prompt: str, single_photo: bool) -> str:
-    """Build a strict prompt that keeps the model focused on the requested edit."""
+def _build_image_edit_prompt(user_prompt, single_photo):
     if single_photo:
-        rules = """
-SINGLE-PHOTO EDITING RULES:
-- Image 0 is the full original photo and is the primary composition/source reference.
-- If image 1 is present, it
+        rules = "\n".join([
+            "SINGLE-PHOTO EDITING RULES:",
+            "- The first supplied image is the full original photo and is the primary composition/source reference.",
+            "- If image 1 is present, it is an identity-only crop made fro
 Preview truncated for large file
