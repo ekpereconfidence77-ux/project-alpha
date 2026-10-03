@@ -12,9 +12,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response, send_file
 
 app = Flask(__name__)
-# Keep secrets/configuration in environment variables.  The development fallback is
-# intentionally local-only; production deployments should always set FLASK_SECRET_KEY.
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-development-secret-change-me"
+
+# Production must use an environment-provided secret. Keep the local fallback
+# only for development so a missing Render secret fails loudly and clearly.
+SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "").strip()
+if os.environ.get("RENDER") and not SECRET_KEY:
+    raise RuntimeError("FLASK_SECRET_KEY must be set in Render Environment Variables.")
+app.secret_key = SECRET_KEY or "dax-local-development-secret-change-me"
 _secure_cookie = os.environ.get("COOKIE_SECURE")
 if _secure_cookie is None:
     _secure_cookie = "1" if os.environ.get("RENDER") else "0"
@@ -46,7 +50,7 @@ GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://project-alpha-1-e1ux.onrender.com/auth/google/callback").strip()
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
@@ -2481,7 +2485,7 @@ def google_login():
     session["google_oauth_state"] = state
     params = {
         "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
@@ -2508,7 +2512,7 @@ def google_callback():
             "code": code,
             "client_id": GOOGLE_CLIENT_ID,
             "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
             "grant_type": "authorization_code",
         }, timeout=20)
         token_r.raise_for_status()
@@ -3387,64 +3391,44 @@ def transcribe():
         }),500
 
 
-@app.route("/image_edit", methods=["POST"])
-@login_required_api
-def image_edit():
-    """
-    Dax image editor using Cloudflare Workers AI FLUX.2 Klein 9B.
-
-    Cloudflare supports up to 4 reference images for this model.
-    Reference images are resized to fit Cloudflare's <512x512 input limit.
-    """
-
-    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-    api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
-
-    if not account_id or not api_token:
-        return jsonify({
-            "error": (
-                "Cloudflare is not configured. Add CLOUDFLARE_ACCOUNT_ID "
-                "and CLOUDFLARE_API_TOKEN to Render Environment Variables."
-            )
-        }), 500
-
-    prompt = str(request.form.get("prompt", "")).strip()
-    images = [
-        f for f in request.files.getlist("images")
-        if f and f.filename
-    ]
-
-    if not prompt:
-        return jsonify({
-            "error": "Please describe the final image you want Dax to create."
-        }), 400
-
-    # FLUX.2 Klein 9B supports a maximum of 4 reference images.
-    if len(images) > 4:
-        return jsonify({
-            "error": "Cloudflare FLUX.2 supports up to 4 reference photos."
-        }), 400
-
-    if not images:
-        return jsonify({
-            "error": "Please select at least one reference photo."
-        }), 400
-
+def _resize_image_for_flux(raw: bytes, max_side: int = 511, quality: int = 95) -> bytes:
+    """Convert an uploaded image to JPEG and keep both dimensions < 512px."""
     try:
-        multipart_files = {}
+        source = Image.open(io.BytesIO(raw)).convert("RGB")
+    except Exception as exc:
+        raise ValueError(f"Invalid image: {exc}") from exc
 
-        for index, image in enumerate(images):
-            raw = image.read()
-            if not raw:
-                continue
+    source.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    source.save(output, format="JPEG", quality=quality, optimize=True)
+    return output.getvalue()
 
-            # Cloudflare requires each reference image to be smaller than
-            # 512x512. Keep the full source as reference 1. For a single
-            # uploaded photo, also create a dedicated high-detail identity
-            # crop so the model gets more facial information than it can
-            # retain from the whole photo alone.
-            try:
-                source = Image.open(io.BytesIO(raw)).convert("RGB")
-                original_w, original_h = source.size
 
+def _make_identity_reference(raw: bytes) -> bytes:
+    """Create an optional square portrait-focused reference from one upload."""
+    try:
+        source = Image.open(io.BytesIO(raw)).convert("RGB")
+        width, height = source.size
+        crop_size = max(1, int(min(width, height) * 0.78))
+        center_x = width / 2.0
+        center_y = height * 0.42
+        left = int(max(0, min(width - crop_size, center_x - crop_size / 2)))
+        top = int(max(0, min(height - crop_size, center_y - crop_size / 2)))
+        crop = source.crop((left, top, left + crop_size, top + crop_size))
+        crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
+
+        output = io.BytesIO()
+        crop.save(output, format="JPEG", quality=97, optimize=True)
+        return output.getvalue()
+    except Exception as exc:
+        raise ValueError(f"Could not create identity reference: {exc}") from exc
+
+
+def _build_image_edit_prompt(user_prompt: str, single_photo: bool) -> str:
+    """Build a strict prompt that keeps the model focused on the requested edit."""
+    if single_photo:
+        rules = """
+SINGLE-PHOTO EDITING RULES:
+- Image 0 is the full original photo and is the primary composition/source reference.
+- If image 1 is present, it
 Preview truncated for large file
