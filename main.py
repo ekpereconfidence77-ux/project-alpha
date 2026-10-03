@@ -4,8 +4,6 @@ import sqlite3
 import base64
 import io
 import requests
-from urllib.parse import urlencode
-import secrets
 from PIL import Image
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -14,10 +12,24 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response, send_file
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-session-key-change-this-in-render"
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True)
 
-DB_FILE = "alpha_memory.db"
+# Production must use an environment-provided secret. Keep the local fallback
+# only for development so a missing Render secret fails loudly and clearly.
+SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "").strip()
+if os.environ.get("RENDER") and not SECRET_KEY:
+    raise RuntimeError("FLASK_SECRET_KEY must be set in Render Environment Variables.")
+app.secret_key = SECRET_KEY or "dax-local-development-secret-change-me"
+_secure_cookie = os.environ.get("COOKIE_SECURE")
+if _secure_cookie is None:
+    _secure_cookie = "1" if os.environ.get("RENDER") else "0"
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=_secure_cookie.lower() in ("1", "true", "yes", "on"),
+    MAX_CONTENT_LENGTH=20 * 1024 * 1024,
+)
+
+DB_FILE = os.environ.get("DB_FILE", "alpha_memory.db")
 
 
 def db_connect():
@@ -35,8 +47,10 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 CHAT_MODEL = "openrouter/free"
 GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
 GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
+
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
@@ -54,15 +68,16 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            google_id TEXT,
+            google_sub TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-    if "google_id" not in columns:
-        conn.execute("ALTER TABLE users ADD COLUMN google_id TEXT")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL")
+    # Backward-compatible migration for databases created before Google sign-in.
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN google_sub TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
@@ -405,22 +420,165 @@ LOGIN_HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Daxx — Sign in</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Dax — Sign in</title>
 <style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#0b0d0f;color:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
-body{display:flex;align-items:center;justify-content:center;padding:20px;min-height:100dvh}.card{width:min(420px,100%);background:#15171a;border:1px solid #2d3035;border-radius:22px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
-.logo{text-align:center;font-size:30px;font-weight:750;letter-spacing:-.7px;margin-bottom:7px}.sub{text-align:center;color:#9b9ea5;font-size:14px;margin-bottom:24px}.google-btn{display:flex;align-items:center;justify-content:center;gap:11px;width:100%;height:50px;border-radius:12px;background:#fff;color:#17181b;text-decoration:none;font-weight:650;font-size:15px}.google-g{font-size:20px;font-weight:800;color:#4285f4}.or{display:flex;align-items:center;gap:10px;margin:18px 0;color:#777b82;font-size:11px}.or:before,.or:after{content:"";height:1px;flex:1;background:#30333a}.tabs{display:flex;gap:7px;margin-bottom:18px}.tabs button{flex:1;height:42px;border:1px solid #30333a;border-radius:10px;background:#1c1f23;color:#aeb1b7;cursor:pointer;font-size:13px}.tabs button.active{background:#2a2d32;color:#fff;border-color:#484b51}
-label{display:block;font-size:12px;color:#c7c9ce;margin:12px 0 7px}input{width:100%;height:48px;border:1px solid #34373c;border-radius:11px;background:#0f1114;color:#fff;padding:0 13px;outline:none}input:focus{border-color:#666b73}.primary{width:100%;height:48px;border:0;border-radius:11px;background:#f4f4f4;color:#111;cursor:pointer;font-weight:700;margin-top:12px}.primary:disabled{opacity:.55}.error{min-height:18px;color:#ff8d8d;font-size:12px;margin-top:10px}.note{text-align:center;color:#777b82;font-size:11px;line-height:1.5;margin-top:18px}
-</style></head><body><div class="card"><div class="logo">Daxx</div><div class="sub">Sign in to continue to your Daxx account</div>
-<a class="google-btn" href="/auth/google"><span class="google-g">G</span><span>Continue with Google</span></a><div class="or"><span>OR</span></div>
-<div class="tabs"><button id="loginTab" class="active" onclick="showMode('login')">Log in with email</button><button id="registerTab" onclick="showMode('register')">Create account</button></div>
-<form onsubmit="submitAuth(event)"><label for="email">Email</label><input id="email" type="email" autocomplete="email" required placeholder="you@example.com"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required placeholder="At least 8 characters"><div id="error" class="error"></div><button id="submit" class="primary" type="submit">Log in with email</button></form>
-<div class="note">Your chats, projects and memories stay connected to your Daxx account.</div></div>
-<script>let mode='login';const loginError=new URLSearchParams(location.search).get('error');if(loginError)document.getElementById('error').textContent=loginError;function showMode(next){mode=next;document.getElementById('loginTab').classList.toggle('active',mode==='login');document.getElementById('registerTab').classList.toggle('active',mode==='register');document.getElementById('submit').textContent=mode==='login'?'Log in with email':'Create account';document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';document.getElementById('error').textContent=''}async function submitAuth(e){e.preventDefault();const b=document.getElementById('submit'),er=document.getElementById('error');er.textContent='';b.disabled=true;try{const r=await fetch(mode==='login'?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Authentication failed.');location.href='/'}catch(x){er.textContent=x.message}finally{b.disabled=false}}</script>
-</body></html>
-"""
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;padding:0}
+body{background:#0b0d0f;color:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;height:100dvh;overflow:hidden;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button,input,textarea{font:inherit}button{touch-action:manipulation}::selection{background:#315da8;color:#fff}
 
+/* ===== DAXX: NORMAL CHATGPT-LIKE RESPONSIVE SHELL ===== */
+#sidebar{position:fixed;inset:0 auto 0 0;width:260px;height:100dvh;background:#17181b;border-right:1px solid #2a2c30;padding:10px;display:flex;flex-direction:column;z-index:1000;overflow:hidden}
+#sidebar>div:first-child{padding:8px 8px 14px!important}
+#sidebar strong{font-size:20px!important;font-weight:700}
+#sidebar .side-tool{width:100%;height:44px;border:0;border-radius:10px;background:transparent;color:#e8e8e8;text-align:left;padding:0 12px;margin:1px 0;font-size:14px;cursor:pointer}
+#sidebar .side-tool:hover,#sidebar .side-tool:active{background:#24262a}
+#sidebar .section-label{font-size:11px;font-weight:700;color:#8a8d93;padding:18px 10px 7px}
+#newChat{width:100%;height:44px;padding:0 13px;border:1px solid #3a3c40;border-radius:10px;background:#24262a;color:#fff;font-size:14px;margin-bottom:10px;cursor:pointer}
+#history{overflow-y:auto;flex:1;min-height:0;padding-right:2px}
+.history-item{padding:10px 11px;border-radius:9px;margin-bottom:3px;color:#d7d7d9;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
+.history-item:hover,.history-item.active{background:#2a2c30}
+#logoutButton{background:#232529!important;border-color:#35373b!important}
+#historyOverlay{display:none}
+
+#main{margin-left:260px;width:calc(100% - 260px);height:100dvh;min-width:0;display:flex;flex-direction:column;background:#0b0d0f;position:relative}
+header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center;padding:8px 16px;background:rgba(11,13,15,.94);border-bottom:1px solid #222428;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);position:relative;z-index:80}
+#topbar-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:16px;font-weight:650;color:#f5f5f5}
+#topbar-title>span:first-of-type{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#topbar-actions{margin-left:auto;display:flex;align-items:center;gap:2px}
+.topbar-btn{width:40px!important;height:40px!important;min-width:40px!important;border:0;border-radius:10px;background:transparent;color:#d8d8da;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.topbar-btn:hover{background:#232529}.topbar-btn.active{background:#292c31;color:#fff}
+.topbar-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+#historyToggle{display:none;width:40px!important;height:40px!important;min-width:40px!important;margin:0!important;padding:0!important;background:transparent!important;color:#eee!important;border-radius:10px!important}
+#webModeNote{font-size:11px;color:#8ab4ff;display:none;margin-left:3px}
+#chatMoreMenu{position:absolute;right:12px;top:54px;z-index:200;display:none;width:230px;background:#202225;border:1px solid #35373b;border-radius:13px;box-shadow:0 16px 40px rgba(0,0,0,.42);padding:6px}
+#chatMoreMenu button{width:100%;height:auto;min-height:40px;text-align:left;border:0;background:transparent;color:#e7e7e9;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:14px}
+#chatMoreMenu button:hover{background:#2a2c30}
+
+#chat{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:30px 24px 24px;display:flex;flex-direction:column;gap:0;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
+#chat>*{width:min(768px,100%);margin-left:auto;margin-right:auto}
+.dax-welcome{width:min(768px,100%)!important;max-width:768px!important;margin:auto!important;padding:32px 8px 26px!important;text-align:center}
+.dax-welcome h1{margin:0 0 8px;font-size:28px;font-weight:650;letter-spacing:-.4px}
+.dax-welcome p{margin:0 0 22px;color:#9a9da3;font-size:15px}
+.dax-suggestions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;text-align:left}
+.dax-suggestion{width:100%;min-height:74px;border:1px solid #303236;border-radius:14px;background:#17191c;color:#e8e8ea;padding:13px 14px;cursor:pointer;font-size:14px;line-height:1.4;text-align:left}
+.dax-suggestion:hover{background:#202226;border-color:#424449}
+.dax-suggestion strong{display:block;margin-bottom:4px;font-size:14px}.dax-suggestion span{display:block;color:#999ca2;font-size:12px}
+
+.message{width:min(768px,100%)!important;max-width:768px!important;margin:0 auto!important;padding:14px 8px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px}
+.user{align-self:center;display:flex;justify-content:flex-end;color:#fff}
+.user .message-body{background:#2f3033;border-radius:18px 18px 5px 18px;padding:10px 14px;max-width:min(78%,620px);text-align:left}
+.alpha{align-self:center;background:transparent;color:#f2f2f3}.alpha .message-body{max-width:100%;padding:2px 0;background:transparent}
+.message-body{line-height:1.65;overflow-wrap:anywhere}.message-body a{color:#8ab4ff;text-decoration:underline}.message-body code{background:#202226;border:1px solid #33353a;border-radius:6px;padding:2px 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.message-body pre{background:#17191c;border:1px solid #2b2d31;border-radius:12px;padding:12px;overflow:auto}
+.message-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}.message-actions button{width:auto!important;min-width:34px!important;height:32px!important;border-radius:9px!important;background:#202226!important;color:#cfd0d3!important;padding:0 8px!important;font-size:12px!important}
+.typing{display:flex;align-items:center;gap:5px;color:#9aa0a8;padding:12px 8px}.typing span{width:7px;height:7px;border-radius:50%;background:#9aa0a8;animation:typing 1.2s infinite ease-in-out}.typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
+
+#status{flex:0 0 auto;width:min(768px,100%);max-width:768px;margin:0 auto;text-align:center;color:#92959b;font-size:12px;min-height:18px;padding:0 8px 5px}
+
+/* composer sits in normal main flow; this prevents overlap/squeezing */
+.composer-wrap{position:relative;flex:0 0 auto;width:100%;padding:6px 24px max(10px,env(safe-area-inset-bottom));background:linear-gradient(to top,#0b0d0f 82%,rgba(11,13,15,0));z-index:70}
+.composer{position:relative;width:min(768px,100%);min-height:52px;margin:0 auto;padding:5px 6px;display:flex;align-items:flex-end;gap:5px;background:#202123;border:1px solid #3a3b3e;border-radius:26px;box-shadow:0 2px 18px rgba(0,0,0,.28)}
+#message{flex:1 1 auto;width:auto;min-width:0;min-height:42px;max-height:150px;margin:0;padding:10px 8px;border:0;background:transparent;color:#f5f5f5;border-radius:20px;font-size:16px;line-height:1.4;resize:none;outline:none;box-shadow:none}
+#message:focus{border:0;box-shadow:none}input,textarea{font-family:inherit}
+#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;min-width:42px!important;flex:0 0 42px!important;margin:0;border-radius:50%!important;align-self:flex-end}
+#imageButton,#micButton{background:#2b2c30!important;color:#f1f2f3!important}#sendButton{background:#f4f4f4!important;color:#111214!important}.icon-button{display:flex;align-items:center;justify-content:center}.icon-button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#micButton.recording{background:#d22!important;animation:pulse 1s infinite}@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
+#attachmentMenu{display:none;position:absolute;left:max(24px,calc((100% - 768px)/2));bottom:66px;background:#202225;border:1px solid #35373b;border-radius:15px;padding:7px;box-shadow:0 12px 35px rgba(0,0,0,.42);z-index:100;min-width:220px}
+.attachment-option{display:flex;align-items:center;gap:10px;width:100%;height:42px!important;min-height:42px!important;border-radius:10px;background:transparent!important;text-align:left;padding:0 11px!important;font-size:14px!important}
+.attachment-option:hover{background:#2b2d31!important}
+#attachmentPreview{display:none;width:min(768px,100%);margin:0 auto;padding:4px 4px 6px;font-size:12px;color:#cdd3dc}
+#attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
+#imagePanel{display:none;width:min(768px,100%);margin:0 auto;padding:12px;background:#181a1d;border:1px solid #2c2e32;border-radius:14px}
+#imageFile{width:100%;margin-bottom:8px;color:#cdd3dc}#imagePreview{display:flex;gap:8px;overflow-x:auto;margin-bottom:8px}#imagePrompt{width:100%;margin-bottom:8px;border-radius:12px}#editButton{background:#7b3cff;width:100%;height:46px;border-radius:12px;padding:0 12px}.image-result{max-width:100%;border-radius:12px;display:block}.download-image{display:inline-block;margin-top:8px;padding:9px 12px;border-radius:9px;background:#2b6cff;color:white;text-decoration:none}
+
+#popoutPanel{display:none;position:fixed;inset:0;z-index:1200;background:#111315;overflow:auto}#popoutHeader{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:12px 18px;background:#181a1d;border-bottom:1px solid #2a2c30}#popoutTitle{font-size:19px;font-weight:700;flex:1}#popoutClose{width:42px;height:42px;background:#303238;border-radius:50%}.popout-content{max-width:900px;margin:0 auto;padding:20px}.popout-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.popout-card{background:#1b1d20;border:1px solid #303236;border-radius:14px;padding:14px;color:#fff;text-align:left}.library-img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;display:block;margin-bottom:8px}.search-box{width:100%;border-radius:12px;margin-bottom:14px}
+.install-banner{position:fixed;left:16px;right:16px;bottom:16px;z-index:1300;max-width:420px;margin:auto;background:#24262a;border:1px solid #3a3c40;border-radius:14px;padding:14px;box-shadow:0 12px 35px rgba(0,0,0,.4)}
+
+/* tablet/phone: sidebar becomes the ChatGPT-style drawer */
+@media(max-width:800px){
+  #sidebar{width:292px;max-width:86vw;transform:translateX(-105%);box-shadow:18px 0 45px rgba(0,0,0,.45);transition:transform .22s ease}
+  body.history-open #sidebar{transform:translateX(0)}
+  #historyOverlay{position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.58)}
+  body.history-open #historyOverlay{display:block}
+  #main{margin-left:0;width:100%;height:100dvh}
+  header{height:56px;min-height:56px;flex-basis:56px;padding:6px 8px}
+  #historyToggle{display:flex!important;align-items:center;justify-content:center}
+  #topbar-title{flex:1;justify-content:center}
+  #topbar-actions{margin-left:0}
+  #chat{padding:18px 14px 16px}
+  #chat>*{width:100%;max-width:768px}
+  .message{padding:12px 2px;font-size:15.8px}
+  .user .message-body{max-width:86%}
+  .dax-welcome{padding:22px 2px 20px!important}
+  .dax-welcome h1{font-size:26px}
+  .dax-suggestions{grid-template-columns:1fr 1fr}
+  .composer-wrap{padding:6px 10px max(9px,env(safe-area-inset-bottom))}
+  .composer{width:100%}
+  #status{width:100%;padding-bottom:4px}
+  #attachmentMenu{left:8px;bottom:64px}
+}
+@media(max-width:520px){
+  .dax-suggestions{grid-template-columns:1fr}
+  .dax-suggestion{min-height:64px}
+  #topbar-actions .topbar-btn:nth-child(2){display:none}
+}
+@media(max-width:380px){
+  #topbar-actions .topbar-btn:nth-child(1){display:none}
+  .dax-welcome h1{font-size:23px}
+  #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
+}
+ .or{display:flex;align-items:center;gap:10px;margin:16px 0;color:#858991;font-size:12px}.or:before,.or:after{content:"";height:1px;flex:1;background:#303238}.google-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:46px;border:1px solid #3a3c41;border-radius:12px;background:#fff;color:#1f1f1f;text-decoration:none;font-weight:600;font-size:14px}.google-btn:active{transform:scale(.99)}.google-g{display:grid;place-items:center;width:22px;height:22px;font-weight:800;font-size:18px;color:#4285f4}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="logo">Dax</div>
+<div class="sub">Your personal AI assistant</div>
+<div class="tabs">
+<button id="loginTab" class="active" onclick="showMode('login')">Log in</button>
+<button id="registerTab" onclick="showMode('register')">Create account</button>
+</div>
+<form onsubmit="submitAuth(event)">
+<label for="email">Email</label>
+<input id="email" type="email" autocomplete="email" required placeholder="you@example.com">
+<label for="password">Password</label>
+<input id="password" type="password" autocomplete="current-password" required placeholder="At least 8 characters">
+<div id="error" class="error"></div>
+<button id="submit" class="primary" type="submit">Log in</button>
+</form>
+<div class="or"><span>or</span></div>
+<a class="google-btn" href="/auth/google"><span class="google-g">G</span><span>Continue with Google</span></a>
+<div class="note">Use an email address and password, or continue with Google, to keep your Dax chats and memories connected to your account.</div>
+</div>
+<script>
+let mode='login';
+function showMode(next){
+ mode=next;
+ document.getElementById('loginTab').classList.toggle('active',mode==='login');
+ document.getElementById('registerTab').classList.toggle('active',mode==='register');
+ document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';
+ document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';
+ document.getElementById('error').textContent='';
+ const q=new URLSearchParams(location.search); if(q.get('google_error')) document.getElementById('error').textContent=q.get('google_error');
+}
+async function submitAuth(e){
+ e.preventDefault();
+ const button=document.getElementById('submit');
+ const error=document.getElementById('error');
+ error.textContent=''; button.disabled=true;
+ try{
+   const r=await fetch(mode==='login'?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
+   const d=await r.json();
+   if(!r.ok) throw new Error(d.error||'Authentication failed.');
+   location.href='/';
+ }catch(err){error.textContent=err.message;}finally{button.disabled=false;}
+}
+</script>
+</body>
+</html>
+"""
 
 
 HTML = r"""
@@ -2303,47 +2461,94 @@ def home():
     user_id = get_current_user_id()
     chat_id = request.cookies.get("alpha_chat_id")
 
-    if not chat_id or not conversation_belongs_to_user(chat_id, user_id):
-        chat_id = str(create_conversation(user_id))
+    try:
+        chat_id_int = int(chat_id) if chat_id else None
+    except (TypeError, ValueError):
+        chat_id_int = None
+    if not chat_id_int or not conversation_belongs_to_user(chat_id_int, user_id):
+        chat_id_int = create_conversation(user_id)
+    chat_id = str(chat_id_int)
 
     response = make_response(render_template_string(HTML))
     response.set_cookie("alpha_chat_id", chat_id, max_age=60*60*24*365, httponly=True, samesite="Lax")
     return response
 
 
+
 @app.route("/auth/google")
 def google_login():
-    if get_current_user_id(): return redirect("/")
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET: return redirect("/login?error=Google+Sign-In+is+not+configured+yet")
-    state=secrets.token_urlsafe(32); session["google_oauth_state"]=state
-    redirect_uri=request.url_root.rstrip("/")+"/auth/google/callback"
-    return redirect(GOOGLE_AUTH_URL+"?"+urlencode({"client_id":GOOGLE_CLIENT_ID,"redirect_uri":redirect_uri,"response_type":"code","scope":"openid email profile","state":state,"access_type":"online","prompt":"select_account"}))
+    if get_current_user_id():
+        return redirect("/")
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return redirect("/login?google_error=Google+login+is+not+configured+yet.")
+    state = uuid.uuid4().hex
+    session["google_oauth_state"] = state
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    from urllib.parse import urlencode
+    return redirect(GOOGLE_AUTH_URL + "?" + urlencode(params))
+
 
 @app.route("/auth/google/callback")
 def google_callback():
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET: return redirect("/login?error=Google+Sign-In+is+not+configured+yet")
-    if request.args.get("error"): return redirect("/login?error=Google+sign-in+was+cancelled")
-    state=request.args.get("state",""); expected=session.pop("google_oauth_state","")
-    if not state or not expected or not secrets.compare_digest(state,expected): return redirect("/login?error=Google+sign-in+session+expired.+Please+try+again")
-    code=request.args.get("code","")
-    if not code: return redirect("/login?error=Google+did+not+return+a+sign-in+code")
-    redirect_uri=request.url_root.rstrip("/")+"/auth/google/callback"
+    if request.args.get("error"):
+        return redirect("/login?google_error=Google+sign-in+was+cancelled.")
+    state = request.args.get("state", "")
+    expected = session.pop("google_oauth_state", "")
+    if not state or not expected or state != expected:
+        return redirect("/login?google_error=Google+sign-in+expired.+Please+try+again.")
+    code = request.args.get("code", "")
+    if not code or not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return redirect("/login?google_error=Google+login+is+not+configured+correctly.")
     try:
-        tr=requests.post(GOOGLE_TOKEN_URL,data={"code":code,"client_id":GOOGLE_CLIENT_ID,"client_secret":GOOGLE_CLIENT_SECRET,"redirect_uri":redirect_uri,"grant_type":"authorization_code"},timeout=15); tr.raise_for_status(); token=tr.json().get("access_token")
-        if not token: raise ValueError("missing access token")
-        ur=requests.get(GOOGLE_USERINFO_URL,headers={"Authorization":"Bearer "+token},timeout=15); ur.raise_for_status(); profile=ur.json()
-        gid=str(profile.get("sub","")).strip(); email=str(profile.get("email","")).strip().lower()
-        if not gid or not email or not bool(profile.get("email_verified")): raise ValueError("unverified Google email")
-    except Exception:
-        app.logger.exception("Google sign-in failed"); return redirect("/login?error=Google+sign-in+could+not+be+completed.+Please+try+again")
-    conn=db_connect(); row=conn.execute("SELECT id FROM users WHERE google_id=?",(gid,)).fetchone()
-    if row: uid=row[0]
-    else:
-        row=conn.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone()
-        if row: uid=row[0]; conn.execute("UPDATE users SET google_id=? WHERE id=?",(gid,uid))
-        else: uid=conn.execute("INSERT INTO users (email,password_hash,google_id) VALUES (?,?,?)",(email,generate_password_hash(secrets.token_urlsafe(48)),gid)).lastrowid
+        token_r = requests.post(GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
+            "grant_type": "authorization_code",
+        }, timeout=20)
+        token_r.raise_for_status()
+        access_token = token_r.json().get("access_token")
+        if not access_token:
+            raise ValueError("Google did not return an access token.")
+        user_r = requests.get(GOOGLE_USERINFO_URL, headers={"Authorization": "Bearer " + access_token}, timeout=20)
+        user_r.raise_for_status()
+        profile = user_r.json()
+        google_sub = str(profile.get("sub", "")).strip()
+        email = str(profile.get("email", "")).strip().lower()
+        verified = profile.get("email_verified") is True
+        if not google_sub or not email or not verified:
+            raise ValueError("Google did not provide a verified email address.")
+
+        conn = db_connect()
+        row = conn.execute("SELECT id FROM users WHERE google_sub = ?", (google_sub,)).fetchone()
+        if row:
+            user_id = row[0]
+        else:
+            row = conn.execute("SELECT id, google_sub FROM users WHERE email = ?", (email,)).fetchone()
+            if row:
+                user_id = row[0]
+                if not row[1]:
+                    conn.execute("UPDATE users SET google_sub = ? WHERE id = ?", (google_sub, user_id))
+            else:
+                cur = conn.execute("INSERT INTO users (email, password_hash, google_sub) VALUES (?, ?, ?)", (email, generate_password_hash(uuid.uuid4().hex), google_sub))
+                user_id = cur.lastrowid
         conn.commit()
-    conn.close(); session.clear(); session["user_id"]=uid; return redirect("/")
+        conn.close()
+        session.clear()
+        session["user_id"] = user_id
+        return redirect("/")
+    except Exception:
+        app.logger.exception("Google OAuth callback failed")
+        return redirect("/login?google_error=Google+sign-in+failed.+Please+try+again.")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -2352,10 +2557,10 @@ def login():
             return redirect("/")
         return render_template_string(LOGIN_HTML)
 
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True) or request.form.to_dict()
     email = str(data.get("email", "")).strip().lower()
     password = str(data.get("password", ""))
-    if not email or "@" not in email:
+    if not email or "@" not in email or len(email) > 320:
         return jsonify({"error": "Enter a valid email address."}), 400
     if not password:
         return jsonify({"error": "Enter your password."}), 400
@@ -2373,13 +2578,15 @@ def login():
 
 @app.route("/register", methods=["POST"])
 def register():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True) or request.form.to_dict()
     email = str(data.get("email", "")).strip().lower()
     password = str(data.get("password", ""))
-    if not email or "@" not in email:
+    if not email or "@" not in email or len(email) > 320:
         return jsonify({"error": "Enter a valid email address."}), 400
     if len(password) < 8:
         return jsonify({"error": "Password must be at least 8 characters."}), 400
+    if len(password) > 256:
+        return jsonify({"error": "Password must be 256 characters or fewer."}), 400
 
     try:
         conn = db_connect()
@@ -2422,17 +2629,20 @@ def current_chat():
         "alpha_chat_id"
     )
 
-    if not chat_id:
-        chat_id = str(
-            create_conversation(user_id)
-        )
+    try:
+        chat_id_int = int(chat_id) if chat_id else None
+    except (TypeError, ValueError):
+        chat_id_int = None
+
+    if not chat_id_int or not conversation_belongs_to_user(chat_id_int, user_id):
+        chat_id_int = create_conversation(user_id)
 
     response = jsonify({
-        "id": int(chat_id)
+        "id": chat_id_int
     })
     response.set_cookie(
         "alpha_chat_id",
-        str(chat_id),
+        str(chat_id_int),
         max_age=60*60*24*365,
         httponly=True,
         samesite="Lax"
@@ -2528,7 +2738,9 @@ def delete_conversation_api(conversation_id):
     row=conn.execute("SELECT id FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id)).fetchone()
     if not row:
         conn.close(); return jsonify({"error":"Chat not found."}),404
-    conn.execute("DELETE FROM messages WHERE conversation_id=?",(conversation_id,))
+    conn.execute("DELETE FROM dax_attachments WHERE conversation_id=? AND user_id=?", (conversation_id, user_id))
+    conn.execute("DELETE FROM dax_project_chats WHERE conversation_id=?", (conversation_id,))
+    conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
     conn.execute("DELETE FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id))
     conn.commit(); conn.close()
     return jsonify({"success":True})
@@ -3179,270 +3391,43 @@ def transcribe():
         }),500
 
 
-@app.route("/image_edit", methods=["POST"])
-@login_required_api
-def image_edit():
-    """
-    Dax image editor using Cloudflare Workers AI FLUX.2 Klein 9B.
-
-    Cloudflare supports up to 4 reference images for this model.
-    Reference images are resized to fit Cloudflare's <512x512 input limit.
-    """
-
-    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-    api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
-
-    if not account_id or not api_token:
-        return jsonify({
-            "error": (
-                "Cloudflare is not configured. Add CLOUDFLARE_ACCOUNT_ID "
-                "and CLOUDFLARE_API_TOKEN to Render Environment Variables."
-            )
-        }), 500
-
-    prompt = str(request.form.get("prompt", "")).strip()
-    images = [
-        f for f in request.files.getlist("images")
-        if f and f.filename
-    ]
-
-    if not prompt:
-        return jsonify({
-            "error": "Please describe the final image you want Dax to create."
-        }), 400
-
-    # FLUX.2 Klein 9B supports a maximum of 4 reference images.
-    if len(images) > 4:
-        return jsonify({
-            "error": "Cloudflare FLUX.2 supports up to 4 reference photos."
-        }), 400
-
-    if not images:
-        return jsonify({
-            "error": "Please select at least one reference photo."
-        }), 400
-
+def _resize_image_for_flux(raw: bytes, max_side: int = 511, quality: int = 95) -> bytes:
+    """Convert an uploaded image to JPEG and keep both dimensions < 512px."""
     try:
-        multipart_files = {}
-
-        for index, image in enumerate(images):
-            raw = image.read()
-            if not raw:
-                continue
-
-            # Cloudflare requires each reference image to be smaller than
-            # 512x512. Keep the full source as reference 1. For a single
-            # uploaded photo, also create a dedicated high-detail identity
-            # crop so the model gets more facial information than it can
-            # retain from the whole photo alone.
-            try:
-                source = Image.open(io.BytesIO(raw)).convert("RGB")
-                original_w, original_h = source.size
-                source.thumbnail((511, 511), Image.Resampling.LANCZOS)
-
-                output = io.BytesIO()
-                source.save(output, format="JPEG", quality=95, optimize=True)
-                image_bytes = output.getvalue()
-            except Exception as exc:
-                return jsonify({
-                    "error": f"Could not process reference photo {index + 1}: {exc}"
-                }), 400
-
-            multipart_files[f"input_image_{index}"] = (
-                f"reference_{index + 1}.jpg",
-                image_bytes,
-                "image/jpeg"
-            )
-
-            # Single-photo identity aid: a square crop from the upper/central
-            # area where a portrait face is normally located. It is deliberately
-            # generated from the same uploaded image, so it cannot introduce a
-            # second person's identity.
-            if len(images) == 1:
-                try:
-                    identity_source = Image.open(io.BytesIO(raw)).convert("RGB")
-                    w, h = identity_source.size
-                    crop_size = max(1, min(w, h, int(min(w, h) * 0.78)))
-                    center_x = w / 2.0
-                    center_y = h * 0.42
-                    left = int(max(0, min(w - crop_size, center_x - crop_size / 2)))
-                    top = int(max(0, min(h - crop_size, center_y - crop_size / 2)))
-                    crop = identity_source.crop((left, top, left + crop_size, top + crop_size))
-                    crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
-
-                    crop_output = io.BytesIO()
-                    crop.save(crop_output, format="JPEG", quality=97, optimize=True)
-                    identity_bytes = crop_output.getvalue()
-
-                    multipart_files["input_image_1"] = (
-                        "identity_reference.jpg",
-                        identity_bytes,
-                        "image/jpeg"
-                    )
-                except Exception:
-                    # The full reference remains usable even if the optional
-                    # identity crop cannot be produced.
-                    pass
-
-        if not multipart_files:
-            return jsonify({
-                "error": "The uploaded images could not be read."
-            }), 400
-
-        if len(multipart_files) == 1:
-            final_prompt = f"""
-Edit the single supplied reference photo into ONE finished photorealistic image.
-
-USER INSTRUCTION:
-{prompt}
-
-SINGLE-PHOTO EDITING RULES:
-- The first supplied image is the FULL ORIGINAL PHOTO and is the primary composition/source reference.
-- If a second supplied image is present, it is an IDENTITY-ONLY FACE REFERENCE cropped from the same original photo. It is NOT a second person and must never be pasted in as a separate face or duplicate subject.
-- Use the identity reference to preserve the exact person's facial structure and recognizable identity: face shape, forehead, eyes, eyebrows, nose, nostrils, lips, mouth shape, cheeks, jawline, chin, ears, hairline, skin tone, natural asymmetry, facial hair and skin texture.
-- Preserve the same person and recognizable identity as strongly as possible. Do not redesign, beautify, age, or replace the face unless the user explicitly asks for a face change.
-- Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.
-- Make ONLY the changes requested by the user; do not invent extra changes.
-- If the user asks for a face swap, use the supplied face/reference as the identity source and blend it naturally into the target image.
-- If the user asks to change clothing, pose, lighting, background, or photography style, change those requested elements while keeping everything else consistent.
-- Keep realistic skin texture, natural asymmetry, facial proportions, shadows, highlights, perspective, lens characteristics, and photographic detail.
-- Do not duplicate the subject, split the image, create a collage, or place the source beside the result.
-- Do not output multiple images.
-- Produce ONE coherent final photograph.
-""".strip()
-        else:
-            final_prompt = f"""
-Create ONE final photorealistic image using the supplied reference images.
-
-USER INSTRUCTION:
-{prompt}
-
-MULTI-PHOTO EDITING RULES:
-- There are multiple reference images, so combine only the visual elements that are relevant to the user's instruction.
-- Do NOT automatically blend every person, object, face, background, or feature from every reference.
-- Decide which reference supplies the subject, identity, clothing, pose, background, lighting, or style based on the user's instruction.
-- Preserve recognizable identity when a face reference is supplied.
-- Follow the user's requested composition exactly.
-- Keep the result as ONE coherent photorealistic photograph.
-- Do not create a collage or place reference images side by side.
-- Do not output multiple images.
-- Avoid duplicate people, duplicate faces, extra fingers, malformed hands, warped objects, halos, seams, or obvious compositing artifacts.
-""".strip()
-
-        form_data = {
-            "prompt": final_prompt,
-            "width": "1024",
-            "height": "1024"
-        }
-
-        url = (
-            "https://api.cloudflare.com/client/v4/accounts/"
-            f"{account_id}/ai/run/@cf/black-forest-labs/flux-2-klein-9b"
-        )
-
-        result = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {api_token}"
-            },
-            data=form_data,
-            files=multipart_files,
-            timeout=240
-        )
-
-        if not result.ok:
-            try:
-                error_data = result.json()
-                errors = error_data.get("errors") or []
-                messages = error_data.get("messages") or []
-                detail = (
-                    errors[0].get("message")
-                    if errors and isinstance(errors[0], dict)
-                    else None
-                ) or (
-                    messages[0].get("message")
-                    if messages and isinstance(messages[0], dict)
-                    else None
-                ) or result.text
-            except Exception:
-                detail = result.text
-
-            return jsonify({
-                "error": f"Cloudflare image error ({result.status_code}): {detail}"
-            }), 502
-
-        # Workers AI returns JSON containing result.image as base64 for this model.
-        content_type = result.headers.get("Content-Type", "")
-        b64_image = None
-
-        if "application/json" in content_type:
-            result_data = result.json()
-            model_result = result_data.get("result") or {}
-            b64_image = model_result.get("image")
-
-            # Be tolerant of a future response wrapper.
-            if not b64_image:
-                b64_image = result_data.get("image")
-
-        if b64_image:
-            if b64_image.startswith("data:image/"):
-                image_url = b64_image
-            else:
-                image_url = f"data:image/jpeg;base64,{b64_image}"
-        else:
-            # Fallback in case the API returns the generated image as raw bytes.
-            raw_output = result.content
-            if not raw_output:
-                return jsonify({
-                    "error": "Cloudflare returned no generated image."
-                }), 502
-
-            encoded = base64.b64encode(raw_output).decode("utf-8")
-            media_type = content_type.split(";")[0] or "image/jpeg"
-            image_url = f"data:{media_type};base64,{encoded}"
-
-        image_id = save_dax_image(
-            get_current_user_id(),
-            None,
-            image_url,
-            "Dax generated image"
-        )
-
-        return jsonify({
-            "success": True,
-            "image_id": image_id,
-            "image_url": image_url,
-            "model": "@cf/black-forest-labs/flux-2-klein-9b",
-            "reference_count": len(multipart_files),
-            "identity_reference_added": len(images) == 1 and "input_image_1" in multipart_files
-        })
-
-    except requests.Timeout:
-        return jsonify({
-            "error": "Image generation timed out. Please try again."
-        }), 504
-
-    except requests.RequestException as exc:
-        return jsonify({
-            "error": f"Could not contact Cloudflare: {exc}"
-        }), 502
-
+        source = Image.open(io.BytesIO(raw)).convert("RGB")
     except Exception as exc:
-        return jsonify({
-            "error": f"Image generation failed: {exc}"
-        }), 500
+        raise ValueError(f"Invalid image: {exc}") from exc
+
+    source.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    source.save(output, format="JPEG", quality=quality, optimize=True)
+    return output.getvalue()
 
 
-if __name__=="__main__":
+def _make_identity_reference(raw: bytes) -> bytes:
+    """Create an optional square portrait-focused reference from one upload."""
+    try:
+        source = Image.open(io.BytesIO(raw)).convert("RGB")
+        width, height = source.size
+        crop_size = max(1, int(min(width, height) * 0.78))
+        center_x = width / 2.0
+        center_y = height * 0.42
+        left = int(max(0, min(width - crop_size, center_x - crop_size / 2)))
+        top = int(max(0, min(height - crop_size, center_y - crop_size / 2)))
+        crop = source.crop((left, top, left + crop_size, top + crop_size))
+        crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
 
-    port=int(
-        os.environ.get(
-            "PORT",
-            "5000"
-        )
-    )
+        output = io.BytesIO()
+        crop.save(output, format="JPEG", quality=97, optimize=True)
+        return output.getvalue()
+    except Exception as exc:
+        raise ValueError(f"Could not create identity reference: {exc}") from exc
 
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+
+def _build_image_edit_prompt(user_prompt, single_photo):
+    if single_photo:
+        rules = "\n".join([
+            "SINGLE-PHOTO EDITING RULES:",
+            "- The first supplied image is the full original photo and is the primary composition/source reference.",
+            "- If image 1 is present, it is an identity-only crop made fro
+Preview truncated for large file
