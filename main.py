@@ -34,13 +34,6 @@ CHAT_MODEL = "openrouter/free"
 GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
 GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
 
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://project-alpha-1-e1ux.onrender.com/auth/google/callback").strip()
-GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-
 
 def init_db():
     conn = db_connect()
@@ -54,16 +47,9 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            google_sub TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # Backward-compatible migration for databases created before Google sign-in.
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN google_sub TEXT")
-    except sqlite3.OperationalError:
-        pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
@@ -515,7 +501,6 @@ header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center
   .dax-welcome h1{font-size:23px}
   #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
 }
- .or{display:flex;align-items:center;gap:10px;margin:16px 0;color:#858991;font-size:12px}.or:before,.or:after{content:"";height:1px;flex:1;background:#303238}.google-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:46px;border:1px solid #3a3c41;border-radius:12px;background:#fff;color:#1f1f1f;text-decoration:none;font-weight:600;font-size:14px}.google-btn:active{transform:scale(.99)}.google-g{display:grid;place-items:center;width:22px;height:22px;font-weight:800;font-size:18px;color:#4285f4}
 </style>
 </head>
 <body>
@@ -534,9 +519,7 @@ header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center
 <div id="error" class="error"></div>
 <button id="submit" class="primary" type="submit">Log in</button>
 </form>
-<div class="or"><span>or</span></div>
-<a class="google-btn" href="/auth/google"><span class="google-g">G</span><span>Continue with Google</span></a>
-<div class="note">Use an email address and password, or continue with Google, to keep your Dax chats and memories connected to your account.</div>
+<div class="note">Use an email address and password to keep your Dax chats and memories connected to your account.</div>
 </div>
 <script>
 let mode='login';
@@ -547,7 +530,6 @@ function showMode(next){
  document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';
  document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';
  document.getElementById('error').textContent='';
- const q=new URLSearchParams(location.search); if(q.get('google_error')) document.getElementById('error').textContent=q.get('google_error');
 }
 async function submitAuth(e){
  e.preventDefault();
@@ -2455,82 +2437,6 @@ def home():
     return response
 
 
-
-@app.route("/auth/google")
-def google_login():
-    if get_current_user_id():
-        return redirect("/")
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return redirect("/login?google_error=Google+login+is+not+configured+yet.")
-    state = uuid.uuid4().hex
-    session["google_oauth_state"] = state
-    params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": state,
-        "access_type": "online",
-        "prompt": "select_account",
-    }
-    from urllib.parse import urlencode
-    return redirect(GOOGLE_AUTH_URL + "?" + urlencode(params))
-
-
-@app.route("/auth/google/callback")
-def google_callback():
-    if request.args.get("error"):
-        return redirect("/login?google_error=Google+sign-in+was+cancelled.")
-    state = request.args.get("state", "")
-    expected = session.pop("google_oauth_state", "")
-    if not state or not expected or state != expected:
-        return redirect("/login?google_error=Google+sign-in+expired.+Please+try+again.")
-    code = request.args.get("code", "")
-    if not code or not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return redirect("/login?google_error=Google+login+is+not+configured+correctly.")
-    try:
-        token_r = requests.post(GOOGLE_TOKEN_URL, data={
-            "code": code,
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI,
-            "grant_type": "authorization_code",
-        }, timeout=20)
-        token_r.raise_for_status()
-        access_token = token_r.json().get("access_token")
-        if not access_token:
-            raise ValueError("Google did not return an access token.")
-        user_r = requests.get(GOOGLE_USERINFO_URL, headers={"Authorization": "Bearer " + access_token}, timeout=20)
-        user_r.raise_for_status()
-        profile = user_r.json()
-        google_sub = str(profile.get("sub", "")).strip()
-        email = str(profile.get("email", "")).strip().lower()
-        verified = profile.get("email_verified") is True
-        if not google_sub or not email or not verified:
-            raise ValueError("Google did not provide a verified email address.")
-
-        conn = db_connect()
-        row = conn.execute("SELECT id FROM users WHERE google_sub = ?", (google_sub,)).fetchone()
-        if row:
-            user_id = row[0]
-        else:
-            row = conn.execute("SELECT id, google_sub FROM users WHERE email = ?", (email,)).fetchone()
-            if row:
-                user_id = row[0]
-                if not row[1]:
-                    conn.execute("UPDATE users SET google_sub = ? WHERE id = ?", (google_sub, user_id))
-            else:
-                cur = conn.execute("INSERT INTO users (email, password_hash, google_sub) VALUES (?, ?, ?)", (email, generate_password_hash(uuid.uuid4().hex), google_sub))
-                user_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        session.clear()
-        session["user_id"] = user_id
-        return redirect("/")
-    except Exception:
-        app.logger.exception("Google OAuth callback failed")
-        return redirect("/login?google_error=Google+sign-in+failed.+Please+try+again.")
-
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -3450,5 +3356,101 @@ def image_edit():
                     w, h = identity_source.size
                     crop_size = max(1, min(w, h, int(min(w, h) * 0.78)))
                     center_x = w / 2.0
-         
+                    center_y = h * 0.42
+                    left = int(max(0, min(w - crop_size, center_x - crop_size / 2)))
+                    top = int(max(0, min(h - crop_size, center_y - crop_size / 2)))
+                    crop = identity_source.crop((left, top, left + crop_size, top + crop_size))
+                    crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
+
+                    crop_output = io.BytesIO()
+                    crop.save(crop_output, format="JPEG", quality=97, optimize=True)
+                    identity_bytes = crop_output.getvalue()
+
+                    multipart_files["input_image_1"] = (
+                        "identity_reference.jpg",
+                        identity_bytes,
+                        "image/jpeg"
+                    )
+                except Exception:
+                    # The full reference remains usable even if the optional
+                    # identity crop cannot be produced.
+                    pass
+
+        if not multipart_files:
+            return jsonify({
+                "error": "The uploaded images could not be read."
+            }), 400
+
+        if len(multipart_files) == 1:
+            final_prompt = f"""
+Edit the single supplied reference photo into ONE finished photorealistic image.
+
+USER INSTRUCTION:
+{prompt}
+
+SINGLE-PHOTO EDITING RULES:
+- The first supplied image is the FULL ORIGINAL PHOTO and is the primary composition/source reference.
+- If a second supplied image is present, it is an IDENTITY-ONLY FACE REFERENCE cropped from the same original photo. It is NOT a second person and must never be pasted in as a separate face or duplicate subject.
+- Use the identity reference to preserve the exact person's facial structure and recognizable identity: face shape, forehead, eyes, eyebrows, nose, nostrils, lips, mouth shape, cheeks, jawline, chin, ears, hairline, skin tone, natural asymmetry, facial hair and skin texture.
+- Preserve the same person and recognizable identity as strongly as possible. Do not redesign, beautify, age, or replace the face unless the user explicitly asks for a face change.
+- Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.
+- Make ONLY the changes requested by the user; do not invent extra changes.
+- If the user asks for a face swap, use the supplied face/reference as the identity source and blend it naturally into the target image.
+- If the user asks to change clothing, pose, lighting, background, or photography style, change those requested elements while keeping everything else consistent.
+- Keep realistic skin texture, natural asymmetry, facial proportions, shadows, highlights, perspective, lens characteristics, and photographic detail.
+- Do not duplicate the subject, split the image, create a collage, or place the source beside the result.
+- Do not output multiple images.
+- Produce ONE coherent final photograph.
+""".strip()
+        else:
+            final_prompt = f"""
+Create ONE final photorealistic image using the supplied reference images.
+
+USER INSTRUCTION:
+{prompt}
+
+MULTI-PHOTO EDITING RULES:
+- There are multiple reference images, so combine only the visual elements that are relevant to the user's instruction.
+- Do NOT automatically blend every person, object, face, background, or feature from every reference.
+- Decide which reference supplies the subject, identity, clothing, pose, background, lighting, or style based on the user's instruction.
+- Preserve recognizable identity when a face reference is supplied.
+- Follow the user's requested composition exactly.
+- Keep the result as ONE coherent photorealistic photograph.
+- Do not create a collage or place reference images side by side.
+- Do not output multiple images.
+- Avoid duplicate people, duplicate faces, extra fingers, malformed hands, warped objects, halos, seams, or obvious compositing artifacts.
+""".strip()
+
+        form_data = {
+            "prompt": final_prompt,
+            "width": "1024",
+            "height": "1024"
+        }
+
+        url = (
+            "https://api.cloudflare.com/client/v4/accounts/"
+            f"{account_id}/ai/run/@cf/black-forest-labs/flux-2-klein-9b"
+        )
+
+        result = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_token}"
+            },
+            data=form_data,
+            files=multipart_files,
+            timeout=240
+        )
+
+        if not result.ok:
+            try:
+                error_data = result.json()
+                errors = error_data.get("errors") or []
+                messages = error_data.get("messages") or []
+                detail = (
+                    errors[0].get("message")
+                    if errors and isinstance(errors[0], dict)
+                    else None
+                ) or (
+                    messages
 Preview truncated for large file
