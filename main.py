@@ -3429,4 +3429,4 @@ def _build_image_edit_prompt(user_prompt, single_photo):
         rules = "\n".join([
             "SINGLE-PHOTO EDITING RULES:",
             "- The first supplied image is the full original photo and is the primary composition/source reference.",
-            "- If image 1 is present, it is an identity-only crop made from the same original photo.",
+            "- If image 1 is present, it is an identity-only crop made fro
