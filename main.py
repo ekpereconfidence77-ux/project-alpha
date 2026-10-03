@@ -397,20 +397,110 @@ LOGIN_HTML = r"""
 <title>Dax — Sign in</title>
 <style>
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:#11151b;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{width:100%;max-width:420px;background:#181d25;border:1px solid #2a303a;border-radius:18px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
-.logo{font-size:28px;font-weight:700;text-align:center;margin-bottom:8px}
-.sub{text-align:center;color:#aab2bf;margin-bottom:24px}
-.tabs{display:flex;gap:6px;background:#11151b;border-radius:12px;padding:4px;margin-bottom:18px}
-.tabs button{flex:1;border:0;border-radius:9px;padding:10px;background:transparent;color:#aab2bf;cursor:pointer;font-size:14px}
-.tabs button.active{background:#29303a;color:#fff}
-label{display:block;font-size:13px;color:#cbd1d9;margin:0 0 6px}
-input{width:100%;padding:13px 14px;border:1px solid #343b46;border-radius:12px;background:#222832;color:#fff;outline:none;font-size:16px;margin-bottom:14px}
-button.primary{width:100%;border:0;border-radius:12px;padding:13px;background:#fff;color:#11151b;font-weight:700;font-size:15px;cursor:pointer}
-.error{min-height:20px;color:#ff8f8f;font-size:13px;margin:4px 0 12px;text-align:center}
-.note{font-size:12px;color:#7f8997;text-align:center;margin-top:18px;line-height:1.5}
+html,body{width:100%;height:100%;margin:0;padding:0}
+body{background:#0b0d0f;color:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;height:100dvh;overflow:hidden;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button,input,textarea{font:inherit}button{touch-action:manipulation}::selection{background:#315da8;color:#fff}
 
-.message-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;opacity:.78}.message-action{border:1px solid #303743;background:transparent;color:#c9d0da;border-radius:8px;padding:5px 8px;font-size:11px;cursor:pointer}.message-action:hover{background:#202630;color:#fff}.install-banner{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);width:min(520px,calc(100vw - 24px));background:#1d232c;border:1px solid #39424f;border-radius:14px;padding:12px 14px;display:none;z-index:1400;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+/* ===== DAXX: NORMAL CHATGPT-LIKE RESPONSIVE SHELL ===== */
+#sidebar{position:fixed;inset:0 auto 0 0;width:260px;height:100dvh;background:#17181b;border-right:1px solid #2a2c30;padding:10px;display:flex;flex-direction:column;z-index:1000;overflow:hidden}
+#sidebar>div:first-child{padding:8px 8px 14px!important}
+#sidebar strong{font-size:20px!important;font-weight:700}
+#sidebar .side-tool{width:100%;height:44px;border:0;border-radius:10px;background:transparent;color:#e8e8e8;text-align:left;padding:0 12px;margin:1px 0;font-size:14px;cursor:pointer}
+#sidebar .side-tool:hover,#sidebar .side-tool:active{background:#24262a}
+#sidebar .section-label{font-size:11px;font-weight:700;color:#8a8d93;padding:18px 10px 7px}
+#newChat{width:100%;height:44px;padding:0 13px;border:1px solid #3a3c40;border-radius:10px;background:#24262a;color:#fff;font-size:14px;margin-bottom:10px;cursor:pointer}
+#history{overflow-y:auto;flex:1;min-height:0;padding-right:2px}
+.history-item{padding:10px 11px;border-radius:9px;margin-bottom:3px;color:#d7d7d9;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
+.history-item:hover,.history-item.active{background:#2a2c30}
+#logoutButton{background:#232529!important;border-color:#35373b!important}
+#historyOverlay{display:none}
+
+#main{margin-left:260px;width:calc(100% - 260px);height:100dvh;min-width:0;display:flex;flex-direction:column;background:#0b0d0f;position:relative}
+header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center;padding:8px 16px;background:rgba(11,13,15,.94);border-bottom:1px solid #222428;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);position:relative;z-index:80}
+#topbar-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:16px;font-weight:650;color:#f5f5f5}
+#topbar-title>span:first-of-type{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#topbar-actions{margin-left:auto;display:flex;align-items:center;gap:2px}
+.topbar-btn{width:40px!important;height:40px!important;min-width:40px!important;border:0;border-radius:10px;background:transparent;color:#d8d8da;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.topbar-btn:hover{background:#232529}.topbar-btn.active{background:#292c31;color:#fff}
+.topbar-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+#historyToggle{display:none;width:40px!important;height:40px!important;min-width:40px!important;margin:0!important;padding:0!important;background:transparent!important;color:#eee!important;border-radius:10px!important}
+#webModeNote{font-size:11px;color:#8ab4ff;display:none;margin-left:3px}
+#chatMoreMenu{position:absolute;right:12px;top:54px;z-index:200;display:none;width:230px;background:#202225;border:1px solid #35373b;border-radius:13px;box-shadow:0 16px 40px rgba(0,0,0,.42);padding:6px}
+#chatMoreMenu button{width:100%;height:auto;min-height:40px;text-align:left;border:0;background:transparent;color:#e7e7e9;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:14px}
+#chatMoreMenu button:hover{background:#2a2c30}
+
+#chat{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:30px 24px 24px;display:flex;flex-direction:column;gap:0;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
+#chat>*{width:min(768px,100%);margin-left:auto;margin-right:auto}
+.dax-welcome{width:min(768px,100%)!important;max-width:768px!important;margin:auto!important;padding:32px 8px 26px!important;text-align:center}
+.dax-welcome h1{margin:0 0 8px;font-size:28px;font-weight:650;letter-spacing:-.4px}
+.dax-welcome p{margin:0 0 22px;color:#9a9da3;font-size:15px}
+.dax-suggestions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;text-align:left}
+.dax-suggestion{width:100%;min-height:74px;border:1px solid #303236;border-radius:14px;background:#17191c;color:#e8e8ea;padding:13px 14px;cursor:pointer;font-size:14px;line-height:1.4;text-align:left}
+.dax-suggestion:hover{background:#202226;border-color:#424449}
+.dax-suggestion strong{display:block;margin-bottom:4px;font-size:14px}.dax-suggestion span{display:block;color:#999ca2;font-size:12px}
+
+.message{width:min(768px,100%)!important;max-width:768px!important;margin:0 auto!important;padding:14px 8px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px}
+.user{align-self:center;display:flex;justify-content:flex-end;color:#fff}
+.user .message-body{background:#2f3033;border-radius:18px 18px 5px 18px;padding:10px 14px;max-width:min(78%,620px);text-align:left}
+.alpha{align-self:center;background:transparent;color:#f2f2f3}.alpha .message-body{max-width:100%;padding:2px 0;background:transparent}
+.message-body{line-height:1.65;overflow-wrap:anywhere}.message-body a{color:#8ab4ff;text-decoration:underline}.message-body code{background:#202226;border:1px solid #33353a;border-radius:6px;padding:2px 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.message-body pre{background:#17191c;border:1px solid #2b2d31;border-radius:12px;padding:12px;overflow:auto}
+.message-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}.message-actions button{width:auto!important;min-width:34px!important;height:32px!important;border-radius:9px!important;background:#202226!important;color:#cfd0d3!important;padding:0 8px!important;font-size:12px!important}
+.typing{display:flex;align-items:center;gap:5px;color:#9aa0a8;padding:12px 8px}.typing span{width:7px;height:7px;border-radius:50%;background:#9aa0a8;animation:typing 1.2s infinite ease-in-out}.typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
+
+#status{flex:0 0 auto;width:min(768px,100%);max-width:768px;margin:0 auto;text-align:center;color:#92959b;font-size:12px;min-height:18px;padding:0 8px 5px}
+
+/* composer sits in normal main flow; this prevents overlap/squeezing */
+.composer-wrap{position:relative;flex:0 0 auto;width:100%;padding:6px 24px max(10px,env(safe-area-inset-bottom));background:linear-gradient(to top,#0b0d0f 82%,rgba(11,13,15,0));z-index:70}
+.composer{position:relative;width:min(768px,100%);min-height:52px;margin:0 auto;padding:5px 6px;display:flex;align-items:flex-end;gap:5px;background:#202123;border:1px solid #3a3b3e;border-radius:26px;box-shadow:0 2px 18px rgba(0,0,0,.28)}
+#message{flex:1 1 auto;width:auto;min-width:0;min-height:42px;max-height:150px;margin:0;padding:10px 8px;border:0;background:transparent;color:#f5f5f5;border-radius:20px;font-size:16px;line-height:1.4;resize:none;outline:none;box-shadow:none}
+#message:focus{border:0;box-shadow:none}input,textarea{font-family:inherit}
+#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;min-width:42px!important;flex:0 0 42px!important;margin:0;border-radius:50%!important;align-self:flex-end}
+#imageButton,#micButton{background:#2b2c30!important;color:#f1f2f3!important}#sendButton{background:#f4f4f4!important;color:#111214!important}.icon-button{display:flex;align-items:center;justify-content:center}.icon-button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#micButton.recording{background:#d22!important;animation:pulse 1s infinite}@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
+#attachmentMenu{display:none;position:absolute;left:max(24px,calc((100% - 768px)/2));bottom:66px;background:#202225;border:1px solid #35373b;border-radius:15px;padding:7px;box-shadow:0 12px 35px rgba(0,0,0,.42);z-index:100;min-width:220px}
+.attachment-option{display:flex;align-items:center;gap:10px;width:100%;height:42px!important;min-height:42px!important;border-radius:10px;background:transparent!important;text-align:left;padding:0 11px!important;font-size:14px!important}
+.attachment-option:hover{background:#2b2d31!important}
+#attachmentPreview{display:none;width:min(768px,100%);margin:0 auto;padding:4px 4px 6px;font-size:12px;color:#cdd3dc}
+#attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
+#imagePanel{display:none;width:min(768px,100%);margin:0 auto;padding:12px;background:#181a1d;border:1px solid #2c2e32;border-radius:14px}
+#imageFile{width:100%;margin-bottom:8px;color:#cdd3dc}#imagePreview{display:flex;gap:8px;overflow-x:auto;margin-bottom:8px}#imagePrompt{width:100%;margin-bottom:8px;border-radius:12px}#editButton{background:#7b3cff;width:100%;height:46px;border-radius:12px;padding:0 12px}.image-result{max-width:100%;border-radius:12px;display:block}.download-image{display:inline-block;margin-top:8px;padding:9px 12px;border-radius:9px;background:#2b6cff;color:white;text-decoration:none}
+
+#popoutPanel{display:none;position:fixed;inset:0;z-index:1200;background:#111315;overflow:auto}#popoutHeader{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:12px 18px;background:#181a1d;border-bottom:1px solid #2a2c30}#popoutTitle{font-size:19px;font-weight:700;flex:1}#popoutClose{width:42px;height:42px;background:#303238;border-radius:50%}.popout-content{max-width:900px;margin:0 auto;padding:20px}.popout-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.popout-card{background:#1b1d20;border:1px solid #303236;border-radius:14px;padding:14px;color:#fff;text-align:left}.library-img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;display:block;margin-bottom:8px}.search-box{width:100%;border-radius:12px;margin-bottom:14px}
+.install-banner{position:fixed;left:16px;right:16px;bottom:16px;z-index:1300;max-width:420px;margin:auto;background:#24262a;border:1px solid #3a3c40;border-radius:14px;padding:14px;box-shadow:0 12px 35px rgba(0,0,0,.4)}
+
+/* tablet/phone: sidebar becomes the ChatGPT-style drawer */
+@media(max-width:800px){
+  #sidebar{width:292px;max-width:86vw;transform:translateX(-105%);box-shadow:18px 0 45px rgba(0,0,0,.45);transition:transform .22s ease}
+  body.history-open #sidebar{transform:translateX(0)}
+  #historyOverlay{position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.58)}
+  body.history-open #historyOverlay{display:block}
+  #main{margin-left:0;width:100%;height:100dvh}
+  header{height:56px;min-height:56px;flex-basis:56px;padding:6px 8px}
+  #historyToggle{display:flex!important;align-items:center;justify-content:center}
+  #topbar-title{flex:1;justify-content:center}
+  #topbar-actions{margin-left:0}
+  #chat{padding:18px 14px 16px}
+  #chat>*{width:100%;max-width:768px}
+  .message{padding:12px 2px;font-size:15.8px}
+  .user .message-body{max-width:86%}
+  .dax-welcome{padding:22px 2px 20px!important}
+  .dax-welcome h1{font-size:26px}
+  .dax-suggestions{grid-template-columns:1fr 1fr}
+  .composer-wrap{padding:6px 10px max(9px,env(safe-area-inset-bottom))}
+  .composer{width:100%}
+  #status{width:100%;padding-bottom:4px}
+  #attachmentMenu{left:8px;bottom:64px}
+}
+@media(max-width:520px){
+  .dax-suggestions{grid-template-columns:1fr}
+  .dax-suggestion{min-height:64px}
+  #topbar-actions .topbar-btn:nth-child(2){display:none}
+}
+@media(max-width:380px){
+  #topbar-actions .topbar-btn:nth-child(1){display:none}
+  .dax-welcome h1{font-size:23px}
+  #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
+}
 </style>
 </head>
 <body>
@@ -3362,89 +3452,5 @@ MULTI-PHOTO EDITING RULES:
                     if errors and isinstance(errors[0], dict)
                     else None
                 ) or (
-                    messages[0].get("message")
-                    if messages and isinstance(messages[0], dict)
-                    else None
-                ) or result.text
-            except Exception:
-                detail = result.text
-
-            return jsonify({
-                "error": f"Cloudflare image error ({result.status_code}): {detail}"
-            }), 502
-
-        # Workers AI returns JSON containing result.image as base64 for this model.
-        content_type = result.headers.get("Content-Type", "")
-        b64_image = None
-
-        if "application/json" in content_type:
-            result_data = result.json()
-            model_result = result_data.get("result") or {}
-            b64_image = model_result.get("image")
-
-            # Be tolerant of a future response wrapper.
-            if not b64_image:
-                b64_image = result_data.get("image")
-
-        if b64_image:
-            if b64_image.startswith("data:image/"):
-                image_url = b64_image
-            else:
-                image_url = f"data:image/jpeg;base64,{b64_image}"
-        else:
-            # Fallback in case the API returns the generated image as raw bytes.
-            raw_output = result.content
-            if not raw_output:
-                return jsonify({
-                    "error": "Cloudflare returned no generated image."
-                }), 502
-
-            encoded = base64.b64encode(raw_output).decode("utf-8")
-            media_type = content_type.split(";")[0] or "image/jpeg"
-            image_url = f"data:{media_type};base64,{encoded}"
-
-        image_id = save_dax_image(
-            get_current_user_id(),
-            None,
-            image_url,
-            "Dax generated image"
-        )
-
-        return jsonify({
-            "success": True,
-            "image_id": image_id,
-            "image_url": image_url,
-            "model": "@cf/black-forest-labs/flux-2-klein-9b",
-            "reference_count": len(multipart_files),
-            "identity_reference_added": len(images) == 1 and "input_image_1" in multipart_files
-        })
-
-    except requests.Timeout:
-        return jsonify({
-            "error": "Image generation timed out. Please try again."
-        }), 504
-
-    except requests.RequestException as exc:
-        return jsonify({
-            "error": f"Could not contact Cloudflare: {exc}"
-        }), 502
-
-    except Exception as exc:
-        return jsonify({
-            "error": f"Image generation failed: {exc}"
-        }), 500
-
-
-if __name__=="__main__":
-
-    port=int(
-        os.environ.get(
-            "PORT",
-            "5000"
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+                    messages
+Preview truncated for large file
