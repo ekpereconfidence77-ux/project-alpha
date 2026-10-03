@@ -9,27 +9,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response, send_file
+from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "dax-local-session-key-change-this-in-render"
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True)
 
-# Production must use an environment-provided secret. Keep the local fallback
-# only for development so a missing Render secret fails loudly and clearly.
-SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "").strip()
-if os.environ.get("RENDER") and not SECRET_KEY:
-    raise RuntimeError("FLASK_SECRET_KEY must be set in Render Environment Variables.")
-app.secret_key = SECRET_KEY or "dax-local-development-secret-change-me"
-_secure_cookie = os.environ.get("COOKIE_SECURE")
-if _secure_cookie is None:
-    _secure_cookie = "1" if os.environ.get("RENDER") else "0"
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=_secure_cookie.lower() in ("1", "true", "yes", "on"),
-    MAX_CONTENT_LENGTH=20 * 1024 * 1024,
-)
-
-DB_FILE = os.environ.get("DB_FILE", "alpha_memory.db")
+DB_FILE = "alpha_memory.db"
 
 
 def db_connect():
@@ -48,13 +34,6 @@ CHAT_MODEL = "openrouter/free"
 GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
 GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
 
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
-GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-
 
 def init_db():
     conn = db_connect()
@@ -68,16 +47,9 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            google_sub TEXT UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # Backward-compatible migration for databases created before Google sign-in.
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN google_sub TEXT")
-    except sqlite3.OperationalError:
-        pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
@@ -132,21 +104,6 @@ def init_db():
             project_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL UNIQUE,
             PRIMARY KEY(project_id, conversation_id)
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS dax_attachments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            message_id INTEGER NOT NULL,
-            kind TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            mime_type TEXT NOT NULL,
-            data_url TEXT,
-            text_content TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -232,70 +189,16 @@ def get_messages(conversation_id, user_id):
 def save_message(conversation_id, role, content):
     conn = db_connect()
 
-    cur = conn.execute(
+    conn.execute(
         """
         INSERT INTO messages (conversation_id, role, content)
         VALUES (?, ?, ?)
         """,
         (conversation_id, role, content)
     )
-    message_id = cur.lastrowid
 
     conn.commit()
     conn.close()
-    return message_id
-
-
-def save_attachment(user_id, conversation_id, message_id, kind, filename, mime_type, data_url=None, text_content=None):
-    conn = db_connect()
-    conn.execute(
-        """INSERT INTO dax_attachments
-           (user_id, conversation_id, message_id, kind, filename, mime_type, data_url, text_content)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (str(user_id), conversation_id, message_id, kind, filename[:200], mime_type[:120], data_url, text_content)
-    )
-    conn.commit(); conn.close()
-
-
-def get_message_attachments(conversation_id, user_id):
-    conn = db_connect()
-    rows = conn.execute(
-        """SELECT message_id, kind, filename, mime_type, data_url, text_content
-           FROM dax_attachments
-           WHERE conversation_id=? AND user_id=? ORDER BY id ASC""",
-        (conversation_id, str(user_id))
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def extract_document_text(file_obj):
-    raw = file_obj.read()
-    if len(raw) > 2_000_000:
-        raise ValueError("Each document must be 2 MB or smaller.")
-    name = (file_obj.filename or "document").lower()
-    mime = file_obj.mimetype or "application/octet-stream"
-    if name.endswith((".txt", ".md", ".csv", ".json", ".log")) or mime.startswith("text/") or mime == "application/json":
-        return raw.decode("utf-8", errors="replace")[:60000]
-    if name.endswith(".pdf") or mime == "application/pdf":
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(raw))
-            return "\n\n".join((page.extract_text() or "") for page in reader.pages)[:60000]
-        except ImportError:
-            raise ValueError("PDF reading needs the pypdf package. Add pypdf to requirements.txt and redeploy.")
-        except Exception as exc:
-            raise ValueError(f"Could not read PDF: {exc}")
-    if name.endswith(".docx") or mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        try:
-            from docx import Document
-            doc = Document(io.BytesIO(raw))
-            return "\n".join(p.text for p in doc.paragraphs)[:60000]
-        except ImportError:
-            raise ValueError("DOCX reading needs python-docx. Add python-docx to requirements.txt and redeploy.")
-        except Exception as exc:
-            raise ValueError(f"Could not read DOCX: {exc}")
-    raise ValueError("Supported documents: TXT, MD, CSV, JSON, PDF, and DOCX.")
 
 
 def rename_conversation(conversation_id, user_id, title):
@@ -425,111 +328,18 @@ LOGIN_HTML = r"""
 <title>Dax — Sign in</title>
 <style>
 *{box-sizing:border-box}
-html,body{width:100%;height:100%;margin:0;padding:0}
-body{background:#0b0d0f;color:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;height:100dvh;overflow:hidden;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-button,input,textarea{font:inherit}button{touch-action:manipulation}::selection{background:#315da8;color:#fff}
-
-/* ===== DAXX: NORMAL CHATGPT-LIKE RESPONSIVE SHELL ===== */
-#sidebar{position:fixed;inset:0 auto 0 0;width:260px;height:100dvh;background:#17181b;border-right:1px solid #2a2c30;padding:10px;display:flex;flex-direction:column;z-index:1000;overflow:hidden}
-#sidebar>div:first-child{padding:8px 8px 14px!important}
-#sidebar strong{font-size:20px!important;font-weight:700}
-#sidebar .side-tool{width:100%;height:44px;border:0;border-radius:10px;background:transparent;color:#e8e8e8;text-align:left;padding:0 12px;margin:1px 0;font-size:14px;cursor:pointer}
-#sidebar .side-tool:hover,#sidebar .side-tool:active{background:#24262a}
-#sidebar .section-label{font-size:11px;font-weight:700;color:#8a8d93;padding:18px 10px 7px}
-#newChat{width:100%;height:44px;padding:0 13px;border:1px solid #3a3c40;border-radius:10px;background:#24262a;color:#fff;font-size:14px;margin-bottom:10px;cursor:pointer}
-#history{overflow-y:auto;flex:1;min-height:0;padding-right:2px}
-.history-item{padding:10px 11px;border-radius:9px;margin-bottom:3px;color:#d7d7d9;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
-.history-item:hover,.history-item.active{background:#2a2c30}
-#logoutButton{background:#232529!important;border-color:#35373b!important}
-#historyOverlay{display:none}
-
-#main{margin-left:260px;width:calc(100% - 260px);height:100dvh;min-width:0;display:flex;flex-direction:column;background:#0b0d0f;position:relative}
-header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center;padding:8px 16px;background:rgba(11,13,15,.94);border-bottom:1px solid #222428;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);position:relative;z-index:80}
-#topbar-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:16px;font-weight:650;color:#f5f5f5}
-#topbar-title>span:first-of-type{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#topbar-actions{margin-left:auto;display:flex;align-items:center;gap:2px}
-.topbar-btn{width:40px!important;height:40px!important;min-width:40px!important;border:0;border-radius:10px;background:transparent;color:#d8d8da;display:flex;align-items:center;justify-content:center;cursor:pointer}
-.topbar-btn:hover{background:#232529}.topbar-btn.active{background:#292c31;color:#fff}
-.topbar-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-#historyToggle{display:none;width:40px!important;height:40px!important;min-width:40px!important;margin:0!important;padding:0!important;background:transparent!important;color:#eee!important;border-radius:10px!important}
-#webModeNote{font-size:11px;color:#8ab4ff;display:none;margin-left:3px}
-#chatMoreMenu{position:absolute;right:12px;top:54px;z-index:200;display:none;width:230px;background:#202225;border:1px solid #35373b;border-radius:13px;box-shadow:0 16px 40px rgba(0,0,0,.42);padding:6px}
-#chatMoreMenu button{width:100%;height:auto;min-height:40px;text-align:left;border:0;background:transparent;color:#e7e7e9;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:14px}
-#chatMoreMenu button:hover{background:#2a2c30}
-
-#chat{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:30px 24px 24px;display:flex;flex-direction:column;gap:0;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
-#chat>*{width:min(768px,100%);margin-left:auto;margin-right:auto}
-.dax-welcome{width:min(768px,100%)!important;max-width:768px!important;margin:auto!important;padding:32px 8px 26px!important;text-align:center}
-.dax-welcome h1{margin:0 0 8px;font-size:28px;font-weight:650;letter-spacing:-.4px}
-.dax-welcome p{margin:0 0 22px;color:#9a9da3;font-size:15px}
-.dax-suggestions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;text-align:left}
-.dax-suggestion{width:100%;min-height:74px;border:1px solid #303236;border-radius:14px;background:#17191c;color:#e8e8ea;padding:13px 14px;cursor:pointer;font-size:14px;line-height:1.4;text-align:left}
-.dax-suggestion:hover{background:#202226;border-color:#424449}
-.dax-suggestion strong{display:block;margin-bottom:4px;font-size:14px}.dax-suggestion span{display:block;color:#999ca2;font-size:12px}
-
-.message{width:min(768px,100%)!important;max-width:768px!important;margin:0 auto!important;padding:14px 8px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px}
-.user{align-self:center;display:flex;justify-content:flex-end;color:#fff}
-.user .message-body{background:#2f3033;border-radius:18px 18px 5px 18px;padding:10px 14px;max-width:min(78%,620px);text-align:left}
-.alpha{align-self:center;background:transparent;color:#f2f2f3}.alpha .message-body{max-width:100%;padding:2px 0;background:transparent}
-.message-body{line-height:1.65;overflow-wrap:anywhere}.message-body a{color:#8ab4ff;text-decoration:underline}.message-body code{background:#202226;border:1px solid #33353a;border-radius:6px;padding:2px 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.message-body pre{background:#17191c;border:1px solid #2b2d31;border-radius:12px;padding:12px;overflow:auto}
-.message-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}.message-actions button{width:auto!important;min-width:34px!important;height:32px!important;border-radius:9px!important;background:#202226!important;color:#cfd0d3!important;padding:0 8px!important;font-size:12px!important}
-.typing{display:flex;align-items:center;gap:5px;color:#9aa0a8;padding:12px 8px}.typing span{width:7px;height:7px;border-radius:50%;background:#9aa0a8;animation:typing 1.2s infinite ease-in-out}.typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
-
-#status{flex:0 0 auto;width:min(768px,100%);max-width:768px;margin:0 auto;text-align:center;color:#92959b;font-size:12px;min-height:18px;padding:0 8px 5px}
-
-/* composer sits in normal main flow; this prevents overlap/squeezing */
-.composer-wrap{position:relative;flex:0 0 auto;width:100%;padding:6px 24px max(10px,env(safe-area-inset-bottom));background:linear-gradient(to top,#0b0d0f 82%,rgba(11,13,15,0));z-index:70}
-.composer{position:relative;width:min(768px,100%);min-height:52px;margin:0 auto;padding:5px 6px;display:flex;align-items:flex-end;gap:5px;background:#202123;border:1px solid #3a3b3e;border-radius:26px;box-shadow:0 2px 18px rgba(0,0,0,.28)}
-#message{flex:1 1 auto;width:auto;min-width:0;min-height:42px;max-height:150px;margin:0;padding:10px 8px;border:0;background:transparent;color:#f5f5f5;border-radius:20px;font-size:16px;line-height:1.4;resize:none;outline:none;box-shadow:none}
-#message:focus{border:0;box-shadow:none}input,textarea{font-family:inherit}
-#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;min-width:42px!important;flex:0 0 42px!important;margin:0;border-radius:50%!important;align-self:flex-end}
-#imageButton,#micButton{background:#2b2c30!important;color:#f1f2f3!important}#sendButton{background:#f4f4f4!important;color:#111214!important}.icon-button{display:flex;align-items:center;justify-content:center}.icon-button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#micButton.recording{background:#d22!important;animation:pulse 1s infinite}@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
-#attachmentMenu{display:none;position:absolute;left:max(24px,calc((100% - 768px)/2));bottom:66px;background:#202225;border:1px solid #35373b;border-radius:15px;padding:7px;box-shadow:0 12px 35px rgba(0,0,0,.42);z-index:100;min-width:220px}
-.attachment-option{display:flex;align-items:center;gap:10px;width:100%;height:42px!important;min-height:42px!important;border-radius:10px;background:transparent!important;text-align:left;padding:0 11px!important;font-size:14px!important}
-.attachment-option:hover{background:#2b2d31!important}
-#attachmentPreview{display:none;width:min(768px,100%);margin:0 auto;padding:4px 4px 6px;font-size:12px;color:#cdd3dc}
-#attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
-#imagePanel{display:none;width:min(768px,100%);margin:0 auto;padding:12px;background:#181a1d;border:1px solid #2c2e32;border-radius:14px}
-#imageFile{width:100%;margin-bottom:8px;color:#cdd3dc}#imagePreview{display:flex;gap:8px;overflow-x:auto;margin-bottom:8px}#imagePrompt{width:100%;margin-bottom:8px;border-radius:12px}#editButton{background:#7b3cff;width:100%;height:46px;border-radius:12px;padding:0 12px}.image-result{max-width:100%;border-radius:12px;display:block}.download-image{display:inline-block;margin-top:8px;padding:9px 12px;border-radius:9px;background:#2b6cff;color:white;text-decoration:none}
-
-#popoutPanel{display:none;position:fixed;inset:0;z-index:1200;background:#111315;overflow:auto}#popoutHeader{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:12px 18px;background:#181a1d;border-bottom:1px solid #2a2c30}#popoutTitle{font-size:19px;font-weight:700;flex:1}#popoutClose{width:42px;height:42px;background:#303238;border-radius:50%}.popout-content{max-width:900px;margin:0 auto;padding:20px}.popout-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.popout-card{background:#1b1d20;border:1px solid #303236;border-radius:14px;padding:14px;color:#fff;text-align:left}.library-img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;display:block;margin-bottom:8px}.search-box{width:100%;border-radius:12px;margin-bottom:14px}
-.install-banner{position:fixed;left:16px;right:16px;bottom:16px;z-index:1300;max-width:420px;margin:auto;background:#24262a;border:1px solid #3a3c40;border-radius:14px;padding:14px;box-shadow:0 12px 35px rgba(0,0,0,.4)}
-
-/* tablet/phone: sidebar becomes the ChatGPT-style drawer */
-@media(max-width:800px){
-  #sidebar{width:292px;max-width:86vw;transform:translateX(-105%);box-shadow:18px 0 45px rgba(0,0,0,.45);transition:transform .22s ease}
-  body.history-open #sidebar{transform:translateX(0)}
-  #historyOverlay{position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.58)}
-  body.history-open #historyOverlay{display:block}
-  #main{margin-left:0;width:100%;height:100dvh}
-  header{height:56px;min-height:56px;flex-basis:56px;padding:6px 8px}
-  #historyToggle{display:flex!important;align-items:center;justify-content:center}
-  #topbar-title{flex:1;justify-content:center}
-  #topbar-actions{margin-left:0}
-  #chat{padding:18px 14px 16px}
-  #chat>*{width:100%;max-width:768px}
-  .message{padding:12px 2px;font-size:15.8px}
-  .user .message-body{max-width:86%}
-  .dax-welcome{padding:22px 2px 20px!important}
-  .dax-welcome h1{font-size:26px}
-  .dax-suggestions{grid-template-columns:1fr 1fr}
-  .composer-wrap{padding:6px 10px max(9px,env(safe-area-inset-bottom))}
-  .composer{width:100%}
-  #status{width:100%;padding-bottom:4px}
-  #attachmentMenu{left:8px;bottom:64px}
-}
-@media(max-width:520px){
-  .dax-suggestions{grid-template-columns:1fr}
-  .dax-suggestion{min-height:64px}
-  #topbar-actions .topbar-btn:nth-child(2){display:none}
-}
-@media(max-width:380px){
-  #topbar-actions .topbar-btn:nth-child(1){display:none}
-  .dax-welcome h1{font-size:23px}
-  #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
-}
- .or{display:flex;align-items:center;gap:10px;margin:16px 0;color:#858991;font-size:12px}.or:before,.or:after{content:"";height:1px;flex:1;background:#303238}.google-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:46px;border:1px solid #3a3c41;border-radius:12px;background:#fff;color:#1f1f1f;text-decoration:none;font-weight:600;font-size:14px}.google-btn:active{transform:scale(.99)}.google-g{display:grid;place-items:center;width:22px;height:22px;font-weight:800;font-size:18px;color:#4285f4}
+body{margin:0;min-height:100vh;background:#11151b;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{width:100%;max-width:420px;background:#181d25;border:1px solid #2a303a;border-radius:18px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+.logo{font-size:28px;font-weight:700;text-align:center;margin-bottom:8px}
+.sub{text-align:center;color:#aab2bf;margin-bottom:24px}
+.tabs{display:flex;gap:6px;background:#11151b;border-radius:12px;padding:4px;margin-bottom:18px}
+.tabs button{flex:1;border:0;border-radius:9px;padding:10px;background:transparent;color:#aab2bf;cursor:pointer;font-size:14px}
+.tabs button.active{background:#29303a;color:#fff}
+label{display:block;font-size:13px;color:#cbd1d9;margin:0 0 6px}
+input{width:100%;padding:13px 14px;border:1px solid #343b46;border-radius:12px;background:#222832;color:#fff;outline:none;font-size:16px;margin-bottom:14px}
+button.primary{width:100%;border:0;border-radius:12px;padding:13px;background:#fff;color:#11151b;font-weight:700;font-size:15px;cursor:pointer}
+.error{min-height:20px;color:#ff8f8f;font-size:13px;margin:4px 0 12px;text-align:center}
+.note{font-size:12px;color:#7f8997;text-align:center;margin-top:18px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -548,9 +358,7 @@ header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center
 <div id="error" class="error"></div>
 <button id="submit" class="primary" type="submit">Log in</button>
 </form>
-<div class="or"><span>or</span></div>
-<a class="google-btn" href="/auth/google"><span class="google-g">G</span><span>Continue with Google</span></a>
-<div class="note">Use an email address and password, or continue with Google, to keep your Dax chats and memories connected to your account.</div>
+<div class="note">Use an email address and password to keep your Dax chats and memories connected to your account.</div>
 </div>
 <script>
 let mode='login';
@@ -561,7 +369,6 @@ function showMode(next){
  document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';
  document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';
  document.getElementById('error').textContent='';
- const q=new URLSearchParams(location.search); if(q.get('google_error')) document.getElementById('error').textContent=q.get('google_error');
 }
 async function submitAuth(e){
  e.preventDefault();
@@ -591,27 +398,20 @@ HTML = r"""
 
 <style>
 *{box-sizing:border-box}
-html,body{width:100%;height:100%;margin:0}
+
 body{
-    background:#0f1115;
-    color:#f4f4f5;
-    font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
-    height:100dvh;
-    min-height:100vh;
-    display:flex;
-    overflow:hidden;
-    -webkit-font-smoothing:antialiased;
-    text-rendering:optimizeLegibility
+    margin:0;
+    background:#11151b;
+    color:#fff;
+    font-family:Arial,sans-serif;
+    height:100vh;
+    display:flex
 }
-button,input,textarea{font:inherit}
-button{touch-action:manipulation}
-::selection{background:#315da8;color:#fff}
 
 #sidebar{
-    width:272px;
-    flex:0 0 272px;
-    background:#17191e;
-    border-right:1px solid #292c33;
+    width:260px;
+    background:#181d25;
+    border-right:1px solid #2a303a;
     padding:12px;
     display:flex;
     flex-direction:column
@@ -655,20 +455,16 @@ button{touch-action:manipulation}
 }
 
 #main{
-    flex:1 1 auto;
-    min-width:0;
-    min-height:0;
+    flex:1;
     display:flex;
     flex-direction:column;
-    background:#0f1115
+    min-width:0
 }
 
 header{
-    padding:10px 18px;
-    background:rgba(15,17,21,.92);
-    border-bottom:1px solid #292c33;
-    backdrop-filter:blur(14px);
-    -webkit-backdrop-filter:blur(14px);
+    padding:10px 14px;
+    background:#181d25;
+    border-bottom:1px solid #2a303a;
     font-size:17px;
     font-weight:700;
     display:flex;
@@ -689,9 +485,8 @@ header{
 
 #chat{
     flex:1;
-    min-height:0;
     overflow-y:auto;
-    padding:28px 20px 180px;
+    padding:24px 18px 150px;
     display:flex;
     flex-direction:column;
     gap:2px;
@@ -774,22 +569,49 @@ header{
 
 .message{
     width:100%;
-    max-width:860px;
+    max-width:820px;
     margin:0 auto;
-    padding:14px 10px;
-    line-height:1.65;
+    padding:13px 8px;
+    line-height:1.55;
     white-space:pre-wrap;
-    overflow-wrap:anywhere;
-    font-size:16px;
+    word-wrap:break-word;
+    font-size:16px
 }
-.user{align-self:center;display:flex;justify-content:flex-end;color:#fff}
-.user .message-body{background:#2a2f38;border-radius:18px 18px 5px 18px;padding:11px 14px;max-width:min(78%,620px);text-align:left}
-.alpha{align-self:center;background:transparent;color:#f2f4f7}
-.user,.alpha{border-radius:14px}
-.message-body{line-height:1.65;overflow-wrap:anywhere}
-.message-body a{color:#8ab4ff;text-decoration:underline}
-.message-body code{background:#20242b;border:1px solid #333943;border-radius:6px;padding:2px 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.message-body pre{background:#171a20;border:1px solid #2b3038;border-radius:12px;padding:12px;overflow:auto}
+
+.user{
+    align-self:center;
+    background:transparent;
+    display:flex;
+    justify-content:flex-end
+}
+
+.user::before{
+    content:"You";
+    display:none
+}
+
+.user{
+    text-align:right
+}
+
+.user{
+    color:#fff
+}
+
+.message-body{line-height:1.6;overflow-wrap:anywhere}
+.message-body a{color:#7db7ff;text-decoration:underline}
+.message-body code{background:#222832;border:1px solid #343b46;border-radius:5px;padding:2px 5px;font-family:monospace}
+
+.alpha{
+    align-self:center;
+    background:transparent;
+    color:#f2f4f7
+}
+
+.user, .alpha{
+    border-radius:12px
+}
+
 .typing{
     display:flex;
     align-items:center;
@@ -909,7 +731,7 @@ button:disabled{
 .composer-wrap{position:sticky;bottom:0;z-index:20;background:#11151b}
 .icon-button{background:#2b3039;display:flex;align-items:center;justify-content:center}
 .icon-button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#attachmentPreview{display:none;max-width:860px;width:100%;margin:0 auto;padding:6px 12px 0;font-size:12px;color:#cdd3dc}
+#attachmentPreview{display:none;max-width:860px;margin:0 auto;padding:6px 10px 0;font-size:12px;color:#cdd3dc}
 #attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
 #imagePanel{
     display:none;
@@ -1046,174 +868,19 @@ button:disabled{
     }
 
     .message{max-width:100%;padding-left:4px;padding-right:4px}
-    #chat{padding:18px 12px 170px}
-   .composer{padding:8px 8px 10px}
+    #chat{padding:18px 10px 145px}
+    .composer{padding:8px 8px 10px}
     #message{font-size:16px}
     #imageButton,#micButton,#sendButton{width:44px;height:44px;flex-basis:44px}
 }
-
-/* Final responsive polish */
-.side-tool{height:44px;color:#cfd3da}
-.side-tool:active,.topbar-btn:active,.message-action:active{transform:scale(.98)}
-.section-label{letter-spacing:.02em}
-.history-item{font-size:14px;color:#c8ccd3}
-#history{scrollbar-width:thin}
-.composer{width:100%;max-width:920px;margin:0 auto;padding:10px 14px 14px;gap:8px;background:#0f1115}
-.composer textarea{box-shadow:0 2px 12px rgba(0,0,0,.18)}
-.icon-button{flex:0 0 46px}
-#sendButton{box-shadow:0 2px 10px rgba(255,255,255,.08)}
-#status{max-width:920px;margin:0 auto;width:100%}
-.install-banner{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-@media(min-width:701px){
-  #historyToggle{display:none!important}
-}
-@media(max-width:700px){
-  body{height:100dvh}
-  header{padding:8px 10px;min-height:54px}
-  #topbar-title{font-size:16px}
-  #topbar-actions{gap:1px}
-  .topbar-btn{width:38px;height:38px}
-  #chat{padding:14px 8px 180px}
-  .message{font-size:15.5px;padding:11px 4px}
-  .user .message-body{max-width:88%;border-radius:17px 17px 5px 17px}
-  .dax-welcome{padding:30px 4px 12px}
-  .dax-welcome h1{font-size:26px}
-  .composer-wrap{padding-top:8px}
-  .composer{padding:7px 8px max(9px,env(safe-area-inset-bottom));gap:6px}
-  #message{min-height:44px;max-height:128px;padding:11px 13px;border-radius:20px}
-  #imageButton,#micButton,#sendButton{width:44px;height:44px;flex-basis:44px}
-  #attachmentMenu{left:8px;bottom:61px}
-}
-@media(max-width:380px){
-  #topbar-actions .topbar-btn:nth-child(n+3){display:none}
-  #message{font-size:15px}
-  #imageButton,#micButton,#sendButton{width:42px;height:42px;flex-basis:42px}
-}
-
-/* DAXX ANDROID / CHATGPT-STYLE FINAL UI */
-html,body{background:#0b0d10!important}
-body{display:flex!important;align-items:stretch!important;justify-content:flex-start!important;padding:0!important;width:100%;height:100dvh;min-height:100dvh;overflow:hidden!important}
-#main{width:100%;min-width:0;height:100dvh;background:#0b0d10!important}
-#sidebar{position:fixed;left:0;top:0;bottom:0;width:300px;max-width:86vw;z-index:1000;transform:translateX(-105%);transition:transform .22s ease;box-shadow:12px 0 40px rgba(0,0,0,.5);display:flex}
-body.history-open #sidebar{transform:translateX(0)}
-#historyOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;display:none;backdrop-filter:blur(2px)}
-body.history-open #historyOverlay{display:block}
-#closeHistory{display:block!important}
-header{position:sticky!important;top:0;z-index:60;height:56px;min-height:56px;padding:6px 8px!important;background:rgba(11,13,16,.96)!important;border-bottom:1px solid #24272d!important}
-#topbar-title{gap:7px;font-size:17px!important;font-weight:650;flex:1}
-#historyToggle{display:flex!important;width:40px;height:40px;border-radius:10px;background:transparent;color:#e8eaed;align-items:center;justify-content:center;font-size:22px;border:0}
-#topbar-actions{gap:0!important}
-.topbar-btn{width:40px!important;height:40px!important;border-radius:10px!important}
-#chat{padding:8px 10px 148px!important;gap:0!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
-.dax-welcome{max-width:520px!important;margin:auto!important;padding:34px 10px 18px!important}
-.dax-welcome h1{font-size:25px!important;font-weight:650!important}
-.dax-welcome p{font-size:14px!important;margin-bottom:18px!important}
-.dax-suggestions{grid-template-columns:1fr 1fr!important;gap:8px!important}
-.dax-suggestion{min-height:68px!important;border-radius:13px!important;padding:11px!important;background:#15181d!important;border-color:#292d34!important}
-.message{max-width:100%!important;width:100%!important;padding:10px 3px!important;font-size:15.5px!important}
-.user .message-body{max-width:88%!important;background:#2a2f35!important;border-radius:18px 18px 5px 18px!important;padding:10px 13px!important}
-.alpha .message-body{max-width:100%!important;padding:4px 2px!important}
-.message-actions{padding-left:2px}
-.composer-wrap{position:fixed!important;left:0;right:0;bottom:0;z-index:80;background:linear-gradient(to top,#0b0d10 78%,rgba(11,13,16,0))!important;padding:7px 8px max(8px,env(safe-area-inset-bottom))!important}
-.composer{display:flex!important;width:100%!important;max-width:100%!important;height:auto!important;min-height:54px!important;margin:0!important;padding:6px!important;gap:6px!important;background:#1a1d22!important;border:1px solid #30343b!important;border-radius:27px!important;box-shadow:0 4px 22px rgba(0,0,0,.32)!important}
-#message{min-height:42px!important;max-height:120px!important;padding:10px 11px!important;border:0!important;background:transparent!important;box-shadow:none!important;border-radius:20px!important;font-size:16px!important}
-#message:focus{border:0!important;box-shadow:none!important}
-#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;flex:0 0 42px!important}
-#imageButton,#micButton{background:#292d34!important}
-#sendButton{background:#f1f3f5!important;color:#11151b!important}
-#attachmentMenu{left:8px!important;bottom:62px!important;border-radius:16px!important}
-#attachmentPreview{max-width:none!important;padding:4px 4px 6px!important}
-#imagePanel{max-width:none!important;margin:0!important;border-radius:14px 14px 0 0}
-#status{font-size:12px!important;padding-bottom:4px!important}
-.install-banner{bottom:82px!important;width:calc(100vw - 20px)!important}
-@media(min-width:701px){
-  body{padding:0!important}
-  #sidebar{position:fixed;display:flex;transform:translateX(-105%)}
-  body.history-open #sidebar{transform:translateX(0)}
-  #historyToggle{display:flex!important}
-  #chat{padding-left:max(12px,calc((100vw - 760px)/2))!important;padding-right:max(12px,calc((100vw - 760px)/2))!important}
-  .composer-wrap{padding-left:max(8px,calc((100vw - 760px)/2))!important;padding-right:max(8px,calc((100vw - 760px)/2))!important}
-}
-@media(max-width:430px){
-  .dax-suggestions{grid-template-columns:1fr!important}
-  .dax-suggestion{min-height:62px!important}
-  #topbar-actions .topbar-btn:nth-child(n+3){display:none!important}
-  .message{font-size:15.2px!important}
-}
-@media(max-width:360px){
-  #topbar-actions .topbar-btn:nth-child(n+2){display:none!important}
-  .dax-welcome h1{font-size:23px!important}
-}
-
-
-/* ===== DAXX MOBILE-FIRST CHAT UI: FINAL OVERRIDE ===== */
-html,body{width:100%;height:100%;margin:0!important;padding:0!important;background:#0b0d0f!important;overflow:hidden!important}
-body{display:block!important;color:#f7f7f8!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important}
-#sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:292px!important;max-width:86vw!important;height:100dvh!important;z-index:200!important;display:flex!important;flex-direction:column!important;transform:translateX(-105%)!important;background:#17181c!important;border:0!important;border-right:1px solid #2b2d31!important;padding:12px!important;box-shadow:18px 0 45px rgba(0,0,0,.45)!important;transition:transform .22s ease!important}
-body.history-open #sidebar{transform:translateX(0)!important}
-#historyOverlay{position:fixed!important;inset:0!important;z-index:190!important;background:rgba(0,0,0,.58)!important;display:none!important}
-body.history-open #historyOverlay{display:block!important}
-#main{position:relative!important;width:100%!important;height:100dvh!important;min-width:0!important;display:flex!important;flex-direction:column!important;background:#0b0d0f!important}
-header{position:relative!important;top:auto!important;left:auto!important;right:auto!important;width:100%!important;height:56px!important;min-height:56px!important;flex:0 0 56px!important;padding:6px 8px!important;background:#0b0d0f!important;border:0!important;box-shadow:none!important;z-index:80!important}
-#historyToggle{display:flex!important;align-items:center!important;justify-content:center!important;width:42px!important;height:42px!important;flex:0 0 42px!important;margin:0!important;padding:0!important;background:transparent!important;color:#f3f4f6!important;border-radius:12px!important}
-#topbar-title{font-size:17px!important;font-weight:650!important;justify-content:center!important;flex:1!important;min-width:0!important;white-space:nowrap!important}
-#topbar-actions{margin-left:0!important;display:flex!important;gap:0!important}
-.topbar-btn{width:42px!important;height:42px!important;flex:0 0 42px!important;border-radius:12px!important;background:transparent!important}
-#chat{position:relative!important;flex:1 1 auto!important;width:100%!important;min-height:0!important;overflow-y:auto!important;overflow-x:hidden!important;padding:8px 16px 145px!important;display:flex!important;flex-direction:column!important;gap:0!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior-y:contain!important}
-.message{width:100%!important;max-width:100%!important;margin:0!important;padding:13px 0!important;font-size:16px!important;line-height:1.6!important}
-.user{width:100%!important;justify-content:flex-end!important;align-self:stretch!important}
-.user .message-body{max-width:82%!important;background:#2f3033!important;border-radius:19px 19px 5px 19px!important;padding:10px 14px!important}
-.alpha .message-body{max-width:100%!important;padding:3px 0!important;background:transparent!important}
-.dax-welcome{width:100%!important;max-width:520px!important;margin:auto!important;padding:20px 4px 18px!important;text-align:center!important}
-.dax-welcome h1{font-size:26px!important;line-height:1.2!important;margin-bottom:8px!important}
-.dax-welcome p{font-size:14px!important;margin-bottom:22px!important;color:#9b9da3!important}
-.dax-suggestions{width:100%!important;grid-template-columns:1fr 1fr!important;gap:9px!important}
-.dax-suggestion{min-height:70px!important;padding:12px!important;border-radius:15px!important;background:#15171a!important;border:1px solid #292c30!important}
-.composer-wrap{position:fixed!important;left:0!important;right:0!important;bottom:0!important;width:100%!important;z-index:100!important;padding:8px 12px max(9px,env(safe-area-inset-bottom))!important;background:linear-gradient(to top,#0b0d0f 72%,rgba(11,13,15,0))!important;border:0!important}
-#status{width:100%!important;max-width:none!important;text-align:center!important;font-size:11px!important;color:#8b8e94!important;padding:0 0 5px!important}
-.composer{position:relative!important;width:100%!important;max-width:none!important;min-height:52px!important;height:auto!important;margin:0!important;padding:5px 6px!important;display:flex!important;align-items:flex-end!important;gap:5px!important;background:#202123!important;border:1px solid #3a3b3e!important;border-radius:27px!important;box-shadow:0 2px 18px rgba(0,0,0,.3)!important}
-#message{flex:1 1 auto!important;width:auto!important;min-width:0!important;min-height:42px!important;max-height:126px!important;margin:0!important;padding:10px 8px!important;border:0!important;background:transparent!important;color:#f5f5f5!important;border-radius:20px!important;font-size:16px!important;line-height:1.35!important;box-shadow:none!important;outline:none!important}
-#message:focus{border:0!important;box-shadow:none!important}
-#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;min-width:42px!important;flex:0 0 42px!important;margin:0!important;border-radius:50%!important;align-self:flex-end!important}
-#imageButton,#micButton{background:#2b2c30!important;color:#f1f2f3!important}
-#sendButton{background:#f4f4f4!important;color:#111214!important}
-#attachmentMenu{position:absolute!important;left:6px!important;bottom:60px!important;width:220px!important;border-radius:17px!important}
-#attachmentPreview{width:100%!important;max-width:none!important;padding:4px 2px 6px!important}
-#imagePanel{width:100%!important;max-width:none!important;margin:0!important;border-radius:16px!important}
-.install-banner{left:10px!important;right:10px!important;bottom:78px!important;width:auto!important}
-.message-actions{display:flex!important;flex-wrap:wrap!important;gap:5px!important}
-@media(max-width:430px){
-  header{height:54px!important;min-height:54px!important;flex-basis:54px!important}
-  #chat{padding-left:14px!important;padding-right:14px!important;padding-bottom:142px!important}
-  .message{font-size:15.5px!important}
-  .user .message-body{max-width:86%!important}
-  .dax-suggestions{grid-template-columns:1fr!important}
-  .dax-welcome{padding-top:18px!important}
-}
-@media(max-width:360px){
-  #topbar-actions .topbar-btn:nth-child(n+2){display:none!important}
-  .dax-welcome h1{font-size:23px!important}
-  #chat{padding-left:12px!important;padding-right:12px!important}
-  #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
-}
-@media(min-width:701px){
-  /* Keep the same phone-first experience on wider screens; only center the phone-like content. */
-  #main{max-width:760px!important;margin:0 auto!important;border-left:1px solid #202226!important;border-right:1px solid #202226!important}
-  #sidebar{display:none!important}
-  #historyToggle{display:flex!important}
-  #chat{padding-left:18px!important;padding-right:18px!important}
-  .composer-wrap{left:calc(50% - 380px)!important;right:calc(50% - 380px)!important;width:760px!important}
-}
-
 </style>
-<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png"><link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
 </head>
 
 <body>
 
 <aside id="sidebar">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 8px 14px">
-        <strong style="font-size:22px">Daxx</strong><span style="opacity:.55;font-size:13px">AI assistant</span>
+        <strong style="font-size:22px">Dax</strong><span style="opacity:.55;font-size:13px">AI assistant</span>
     </div>
     <button id="closeHistory" onclick="closeHistory()">✕ Close</button>
     <button class="side-tool" onclick="openPopout('search')">🔎 Search</button>
@@ -1235,12 +902,11 @@ header{position:relative!important;top:auto!important;left:auto!important;right:
   <div id="popoutHeader"><div id="popoutTitle">Dax</div><button id="popoutClose" onclick="closePopout()">✕</button></div>
   <div id="popoutBody" class="popout-content"></div>
 </div>
-<div id="installBanner" class="install-banner"><div style="font-weight:700;margin-bottom:4px">Install Daxx</div><div style="opacity:.75;font-size:13px;margin-bottom:10px">Add Daxx to your Android home screen like an app.</div><div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="dismissInstall()">Not now</button><button onclick="installDaxx()">Install</button></div></div>
 
 <section id="main">
 
 <header style="position:relative">
-    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Daxx</span><span id="webModeNote">Web</span></div>
+    <div id="topbar-title"><button id="historyToggle" onclick="toggleHistory()">☰</button><span>Dax</span><span id="webModeNote">Web</span></div>
     <div id="topbar-actions">
         <button class="topbar-btn" id="topVoiceButton" onclick="toggleRecording()" aria-label="Voice" title="Voice">
             <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
@@ -1253,11 +919,9 @@ header{position:relative!important;top:auto!important;left:auto!important;right:
         </button>
     </div>
     <div id="chatMoreMenu">
-        <button onclick="shareDaxxApp()">📤 Share Daxx app</button>
         <button onclick="shareCurrentChat()">↗️ Share chat</button>
         <button onclick="renameCurrentChat()">✏️ Rename chat</button>
         <button onclick="findInChat()">🔎 Find in chat</button>
-        <button onclick="toggleVoiceReplies()">🔊 Voice replies: <span id="voiceReplyState">Off</span></button>
         <button onclick="readLastReply()">🔊 Read last reply</button>
         <button onclick="newChat();closeChatMore()">＋ New chat</button>
         <button onclick="deleteCurrentChat()" style="color:#ff8f8f">🗑️ Delete chat</button>
@@ -1312,21 +976,17 @@ header{position:relative!important;top:auto!important;left:auto!important;right:
         <button class="attachment-option" type="button" onclick="chooseEditImage()">
             <span>✏️</span><span>Edit a photo</span>
         </button>
-        <button class="attachment-option" type="button" onclick="chooseDocument()">
-            <span>📄</span><span>Add document</span>
-        </button>
         <button class="attachment-option" type="button" onclick="takePhoto()">
             <span>📷</span><span>Take a photo</span>
         </button>
     </div>
     <input id="chatImageInput" type="file" accept="image/*" multiple hidden>
-    <input id="chatDocumentInput" type="file" accept=".txt,.md,.csv,.json,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden>
     <div id="attachmentPreview"></div>
     <div class="composer">
         <button id="imageButton" class="icon-button" type="button" onclick="toggleAttachmentMenu()" aria-label="Add photos and files" title="Add photos and files">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <textarea id="message" rows="1" placeholder="Message Daxx..." autocomplete="off" enterkeyhint="enter"></textarea>
+        <textarea id="message" rows="1" placeholder="Message Dax..." autocomplete="off" enterkeyhint="enter"></textarea>
         <button id="micButton" class="icon-button" type="button" onclick="toggleRecording()" aria-label="Voice conversation" title="Voice">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
         </button>
@@ -1353,9 +1013,7 @@ const micButton=document.getElementById("micButton");
 const sendButton=document.getElementById("sendButton");
 const statusBox=document.getElementById("status");
 const chatImageInput=document.getElementById("chatImageInput");
-const chatDocumentInput=document.getElementById("chatDocumentInput");
 const attachmentMenu=document.getElementById("attachmentMenu");
-let chatDocumentFiles=[];
 const attachmentPreview=document.getElementById("attachmentPreview");
 let chatImageFiles=[];
 let chatImageMode="analyze";
@@ -1445,9 +1103,6 @@ function renderDaxMarkdown(text){
     return safe;
 }
 
-async function copyText(text){try{await navigator.clipboard.writeText(text);setStatus("Copied.");setTimeout(()=>setStatus(""),1200);}catch(e){window.prompt("Copy this text:",text);}}
-async function shareText(text){try{if(navigator.share){await navigator.share({title:"Daxx",text});}else{await copyText(text);}}catch(e){}}
-async function regenerateLast(){if(!currentChatId)return;const ms=[...document.querySelectorAll("#chat .message.user")];if(!ms.length)return;const last=ms[ms.length-1].innerText;messageInput.value=last;autoResize();await sendMessage();}
 function addMessage(text,who){
     const div=document.createElement("div");
     div.className="message "+who;
@@ -1462,22 +1117,30 @@ function addMessage(text,who){
         bubble.style.borderRadius="18px 18px 5px 18px";
         bubble.style.textAlign="left";
         div.appendChild(bubble);
-        const actions=document.createElement("div"); actions.className="message-actions";
-        const edit=document.createElement("button"); edit.className="message-action"; edit.textContent="Edit"; edit.onclick=()=>{messageInput.value=text;autoResize();messageInput.focus();}; actions.appendChild(edit);
-        const copy=document.createElement("button"); copy.className="message-action"; copy.textContent="Copy"; copy.onclick=()=>copyText(text); actions.appendChild(copy);
-        div.appendChild(actions);
     }else{
         const body=document.createElement("div");
         body.className="message-body";
         body.innerHTML=renderDaxMarkdown(text);
         div.appendChild(body);
 
-        const actions=document.createElement("div"); actions.className="message-actions";
-        const makeAction=(label,fn)=>{const b=document.createElement("button");b.type="button";b.className="message-action";b.textContent=label;b.onclick=fn;return b;};
-        actions.appendChild(makeAction("Copy",()=>copyText(text)));
-        actions.appendChild(makeAction("Read aloud",()=>speak(text)));
-        actions.appendChild(makeAction("Share",()=>shareText(text)));
-        actions.appendChild(makeAction("Regenerate",()=>regenerateLast()));
+        const actions=document.createElement("div");
+        actions.style.marginTop="7px";
+        actions.style.display="flex";
+        actions.style.gap="6px";
+
+        const readButton=document.createElement("button");
+        readButton.type="button";
+        readButton.textContent="🔊 Read aloud";
+        readButton.title="Read this message aloud";
+        readButton.style.border="0";
+        readButton.style.background="transparent";
+        readButton.style.cursor="pointer";
+        readButton.style.padding="4px 0";
+        readButton.style.fontSize="12px";
+        readButton.style.opacity=".7";
+        readButton.onclick=()=>speak(text);
+        actions.appendChild(readButton);
+
         div.appendChild(actions);
     }
 
@@ -1502,17 +1165,6 @@ function removeTyping(){
 function autoResize(){
     messageInput.style.height="auto";
     messageInput.style.height=Math.min(messageInput.scrollHeight,150)+"px";
-}
-
-function toggleVoiceReplies(){
-    const on=localStorage.getItem("daxxVoiceReplies")==="1";
-    localStorage.setItem("daxxVoiceReplies",on?"0":"1");
-    updateVoiceReplyState();
-    if(!on) setStatus("Voice replies enabled.");
-}
-function updateVoiceReplyState(){
-    const el=document.getElementById("voiceReplyState");
-    if(el) el.textContent=localStorage.getItem("daxxVoiceReplies")==="1"?"On":"Off";
 }
 
 function speak(text){
@@ -1613,32 +1265,6 @@ function toggleChatMore(){
 }
 function closeChatMore(){document.getElementById("chatMoreMenu").style.display="none";}
 
-async function shareDaxxApp(){
-    closeChatMore();
-    const appUrl=window.location.origin + "/";
-    const shareText="Try Daxx — your personal AI assistant.";
-    try{
-        if(navigator.share){
-            await navigator.share({title:"Daxx",text:shareText,url:appUrl});
-            return;
-        }
-        if(navigator.clipboard){
-            await navigator.clipboard.writeText(appUrl);
-            alert("Daxx app link copied. You can paste it into WhatsApp or anywhere you want to share it.");
-            return;
-        }
-        window.prompt("Copy your Daxx app link:",appUrl);
-    }catch(e){
-        if(e && e.name==="AbortError") return;
-        try{
-            await navigator.clipboard.writeText(appUrl);
-            alert("Daxx app link copied.");
-        }catch(err){
-            window.prompt("Copy your Daxx app link:",appUrl);
-        }
-    }
-}
-
 async function shareCurrentChat(){
     closeChatMore();
     const title="Dax chat";
@@ -1688,12 +1314,6 @@ function toggleHistory(){
 function closeHistory(){
     document.body.classList.remove("history-open");
 }
-
-let deferredInstallPrompt=null;
-window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstallPrompt=e;if(!localStorage.getItem("daxxInstallDismissed"))document.getElementById("installBanner").style.display="block";});
-async function installDaxx(){const b=document.getElementById("installBanner");if(!deferredInstallPrompt){b.style.display="none";alert("On Android Chrome, open the browser menu and choose Add to Home screen or Install app.");return;}deferredInstallPrompt.prompt();try{await deferredInstallPrompt.userChoice;}catch(e){}deferredInstallPrompt=null;b.style.display="none";}
-function dismissInstall(){localStorage.setItem("daxxInstallDismissed","1");document.getElementById("installBanner").style.display="none";}
-if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/service-worker.js").catch(()=>{}));
 
 async function logout(){
     if(!confirm("Log out of Dax?")) return;
@@ -1795,16 +1415,11 @@ async function sendMessage(textFromVoice=null){
 
     if(!text) return;
 
-    const filesForThisTurn=[...chatImageFiles];
-    const imageModeForThisTurn=chatImageMode;
-    const documentsForThisTurn=[...chatDocumentFiles];
     addMessage(text,"user");
 
     messageInput.value="";
     chatImageFiles=[];
     chatImageInput.value="";
-    chatDocumentFiles=[];
-    chatDocumentInput.value="";
     attachmentPreview.innerHTML="";
     attachmentPreview.style.display="none";
 
@@ -1819,12 +1434,9 @@ async function sendMessage(textFromVoice=null){
         form.append("message",text);
         form.append("conversation_id",currentChatId||"");
         form.append("force_web",forceWebSearch?"1":"0");
-        if(filesForThisTurn.length){
-            filesForThisTurn.forEach(f=>form.append("images",f));
-            form.append("image_mode",imageModeForThisTurn);
-        }
-        if(documentsForThisTurn.length){
-            documentsForThisTurn.forEach(f=>form.append("documents",f));
+        if(chatImageFiles.length){
+            chatImageFiles.forEach(f=>form.append("images",f));
+            form.append("image_mode",chatImageMode);
         }
         const response=await fetch("/chat",{method:"POST",body:form});
 
@@ -1851,8 +1463,9 @@ async function sendMessage(textFromVoice=null){
 
         removeTyping();
         addMessage(data.reply,"alpha");
-        if(localStorage.getItem("daxxVoiceReplies")==="1") speak(data.reply);
 
+        // Dax does NOT read replies automatically.
+        // Use the "🔊 Read aloud" button on a reply when requested.
         setStatus("");
 
         await loadHistory();
@@ -1900,20 +1513,6 @@ function takePhoto(){
     chatImageInput.click();
 }
 
-function chooseDocument(){
-    attachmentMenu.style.display="none";
-    chatDocumentInput.click();
-}
-function updateDocumentPreview(){
-    chatDocumentFiles=Array.from(chatDocumentInput.files||[]).slice(0,3);
-    const names=chatDocumentFiles.map(f=>f.name).join(", ");
-    if(chatDocumentFiles.length){
-        attachmentPreview.style.display="block";
-        attachmentPreview.innerHTML=`<span>${chatDocumentFiles.length} document${chatDocumentFiles.length===1?"":"s"} attached: ${escapeHtml(names)}</span>`;
-    }
-}
-chatDocumentInput.addEventListener("change",updateDocumentPreview);
-
 function updateChatImagePreview(){
     chatImageFiles=Array.from(chatImageInput.files||[]).slice(0,3);
     attachmentPreview.innerHTML="";
@@ -1928,7 +1527,6 @@ function updateChatImagePreview(){
 }
 
 chatImageInput.addEventListener("change",updateChatImagePreview);
-updateVoiceReplyState();
 document.addEventListener("click",e=>{
     if(!attachmentMenu.contains(e.target) && e.target!==document.getElementById("imageButton")){ attachmentMenu.style.display="none"; }
 });
@@ -2162,7 +1760,7 @@ function addImageMessage(
     const download=document.createElement("a");
 
     download.href=url;
-    download.download="daxx-edited-image.png";
+    download.download="alpha-edited-image.png";
     download.textContent="⬇️ Save image";
     download.className="download-image";
 
@@ -2461,94 +2059,13 @@ def home():
     user_id = get_current_user_id()
     chat_id = request.cookies.get("alpha_chat_id")
 
-    try:
-        chat_id_int = int(chat_id) if chat_id else None
-    except (TypeError, ValueError):
-        chat_id_int = None
-    if not chat_id_int or not conversation_belongs_to_user(chat_id_int, user_id):
-        chat_id_int = create_conversation(user_id)
-    chat_id = str(chat_id_int)
+    if not chat_id or not conversation_belongs_to_user(chat_id, user_id):
+        chat_id = str(create_conversation(user_id))
 
     response = make_response(render_template_string(HTML))
     response.set_cookie("alpha_chat_id", chat_id, max_age=60*60*24*365, httponly=True, samesite="Lax")
     return response
 
-
-
-@app.route("/auth/google")
-def google_login():
-    if get_current_user_id():
-        return redirect("/")
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return redirect("/login?google_error=Google+login+is+not+configured+yet.")
-    state = uuid.uuid4().hex
-    session["google_oauth_state"] = state
-    params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": state,
-        "access_type": "online",
-        "prompt": "select_account",
-    }
-    from urllib.parse import urlencode
-    return redirect(GOOGLE_AUTH_URL + "?" + urlencode(params))
-
-
-@app.route("/auth/google/callback")
-def google_callback():
-    if request.args.get("error"):
-        return redirect("/login?google_error=Google+sign-in+was+cancelled.")
-    state = request.args.get("state", "")
-    expected = session.pop("google_oauth_state", "")
-    if not state or not expected or state != expected:
-        return redirect("/login?google_error=Google+sign-in+expired.+Please+try+again.")
-    code = request.args.get("code", "")
-    if not code or not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return redirect("/login?google_error=Google+login+is+not+configured+correctly.")
-    try:
-        token_r = requests.post(GOOGLE_TOKEN_URL, data={
-            "code": code,
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
-            "grant_type": "authorization_code",
-        }, timeout=20)
-        token_r.raise_for_status()
-        access_token = token_r.json().get("access_token")
-        if not access_token:
-            raise ValueError("Google did not return an access token.")
-        user_r = requests.get(GOOGLE_USERINFO_URL, headers={"Authorization": "Bearer " + access_token}, timeout=20)
-        user_r.raise_for_status()
-        profile = user_r.json()
-        google_sub = str(profile.get("sub", "")).strip()
-        email = str(profile.get("email", "")).strip().lower()
-        verified = profile.get("email_verified") is True
-        if not google_sub or not email or not verified:
-            raise ValueError("Google did not provide a verified email address.")
-
-        conn = db_connect()
-        row = conn.execute("SELECT id FROM users WHERE google_sub = ?", (google_sub,)).fetchone()
-        if row:
-            user_id = row[0]
-        else:
-            row = conn.execute("SELECT id, google_sub FROM users WHERE email = ?", (email,)).fetchone()
-            if row:
-                user_id = row[0]
-                if not row[1]:
-                    conn.execute("UPDATE users SET google_sub = ? WHERE id = ?", (google_sub, user_id))
-            else:
-                cur = conn.execute("INSERT INTO users (email, password_hash, google_sub) VALUES (?, ?, ?)", (email, generate_password_hash(uuid.uuid4().hex), google_sub))
-                user_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        session.clear()
-        session["user_id"] = user_id
-        return redirect("/")
-    except Exception:
-        app.logger.exception("Google OAuth callback failed")
-        return redirect("/login?google_error=Google+sign-in+failed.+Please+try+again.")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -2557,10 +2074,10 @@ def login():
             return redirect("/")
         return render_template_string(LOGIN_HTML)
 
-    data = request.get_json(silent=True) or request.form.to_dict()
+    data = request.get_json(silent=True) or {}
     email = str(data.get("email", "")).strip().lower()
     password = str(data.get("password", ""))
-    if not email or "@" not in email or len(email) > 320:
+    if not email or "@" not in email:
         return jsonify({"error": "Enter a valid email address."}), 400
     if not password:
         return jsonify({"error": "Enter your password."}), 400
@@ -2578,15 +2095,13 @@ def login():
 
 @app.route("/register", methods=["POST"])
 def register():
-    data = request.get_json(silent=True) or request.form.to_dict()
+    data = request.get_json(silent=True) or {}
     email = str(data.get("email", "")).strip().lower()
     password = str(data.get("password", ""))
-    if not email or "@" not in email or len(email) > 320:
+    if not email or "@" not in email:
         return jsonify({"error": "Enter a valid email address."}), 400
     if len(password) < 8:
         return jsonify({"error": "Password must be at least 8 characters."}), 400
-    if len(password) > 256:
-        return jsonify({"error": "Password must be 256 characters or fewer."}), 400
 
     try:
         conn = db_connect()
@@ -2629,20 +2144,17 @@ def current_chat():
         "alpha_chat_id"
     )
 
-    try:
-        chat_id_int = int(chat_id) if chat_id else None
-    except (TypeError, ValueError):
-        chat_id_int = None
-
-    if not chat_id_int or not conversation_belongs_to_user(chat_id_int, user_id):
-        chat_id_int = create_conversation(user_id)
+    if not chat_id:
+        chat_id = str(
+            create_conversation(user_id)
+        )
 
     response = jsonify({
-        "id": chat_id_int
+        "id": int(chat_id)
     })
     response.set_cookie(
         "alpha_chat_id",
-        str(chat_id_int),
+        str(chat_id),
         max_age=60*60*24*365,
         httponly=True,
         samesite="Lax"
@@ -2693,26 +2205,26 @@ def history():
     })
 
 
-def attachments_api_payload(rows):
-    return [{"message_id":r[0],"kind":r[1],"filename":r[2],"mime_type":r[3],"data_url":r[4],"text_content":r[5]} for r in rows]
-
-
 @app.route("/history/<int:conversation_id>")
 @login_required_api
 def history_chat(conversation_id):
 
     user_id = get_current_user_id()
 
-    rows=get_messages(conversation_id, user_id)
-    attachments = get_message_attachments(conversation_id, user_id)
-    by_message = {}
-    for mid, kind, filename, mime, data_url, text_content in attachments:
-        by_message.setdefault(mid, []).append({"kind":kind,"filename":filename,"mime_type":mime,"data_url":data_url,"text_content":text_content})
-    # get_messages intentionally stays compatible with the older 3-column shape;
-    # attachment display is also exposed through a lightweight separate endpoint.
+    rows=get_messages(
+        conversation_id,
+        user_id
+    )
+
     return jsonify({
-        "messages":[{"role":r[0],"content":r[1],"created_at":r[2]} for r in rows],
-        "attachments":attachments_api_payload(attachments)
+        "messages":[
+            {
+                "role":r[0],
+                "content":r[1],
+                "created_at":r[2]
+            }
+            for r in rows
+        ]
     })
 
 
@@ -2738,9 +2250,7 @@ def delete_conversation_api(conversation_id):
     row=conn.execute("SELECT id FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id)).fetchone()
     if not row:
         conn.close(); return jsonify({"error":"Chat not found."}),404
-    conn.execute("DELETE FROM dax_attachments WHERE conversation_id=? AND user_id=?", (conversation_id, user_id))
-    conn.execute("DELETE FROM dax_project_chats WHERE conversation_id=?", (conversation_id,))
-    conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
+    conn.execute("DELETE FROM messages WHERE conversation_id=?",(conversation_id,))
     conn.execute("DELETE FROM conversations WHERE id=? AND user_id=?",(conversation_id,user_id))
     conn.commit(); conn.close()
     return jsonify({"success":True})
@@ -2780,27 +2290,6 @@ def projects_api():
     return jsonify({"projects":[{"id":r[0],"name":r[1],"icon":r[2],"created_at":r[3]} for r in rows]})
 
 
-@app.route("/projects/<int:project_id>/chats", methods=["GET", "POST"])
-@login_required_api
-def project_chats_api(project_id):
-    user_id=get_current_user_id()
-    conn=db_connect()
-    project=conn.execute("SELECT id FROM dax_projects WHERE id=? AND user_id=?",(project_id,str(user_id))).fetchone()
-    if not project:
-        conn.close(); return jsonify({"error":"Project not found."}),404
-    if request.method=="POST":
-        data=request.get_json(silent=True) or {}
-        cid=data.get("conversation_id")
-        try: cid=int(cid)
-        except Exception: conn.close(); return jsonify({"error":"Invalid chat id."}),400
-        ok=conn.execute("SELECT id FROM conversations WHERE id=? AND user_id=?",(cid,user_id)).fetchone()
-        if not ok: conn.close(); return jsonify({"error":"Chat not found."}),404
-        conn.execute("INSERT OR IGNORE INTO dax_project_chats(project_id,conversation_id) VALUES(?,?)",(project_id,cid)); conn.commit()
-    rows=conn.execute("""SELECT c.id,c.title,c.created_at FROM conversations c JOIN dax_project_chats pc ON pc.conversation_id=c.id WHERE pc.project_id=? AND c.user_id=? ORDER BY c.id DESC""",(project_id,user_id)).fetchall()
-    conn.close()
-    return jsonify({"chats":[{"id":r[0],"title":r[1],"created_at":r[2]} for r in rows]})
-
-
 @app.route("/plugins")
 @login_required_api
 def plugins_api():
@@ -2810,36 +2299,6 @@ def plugins_api():
         {"id":"voice","name":"Voice","icon":"🎙️","description":"Record a message and transcribe it."}
     ]})
 
-
-@app.route("/manifest.webmanifest")
-def pwa_manifest():
-    return jsonify({
-        "name": "Daxx", "short_name": "Daxx", "description": "Daxx personal AI assistant",
-        "start_url": "/", "scope": "/", "display": "standalone",
-        "background_color": "#111418", "theme_color": "#111418", "orientation": "portrait-primary",
-        "icons": [
-            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
-        ]
-    })
-
-@app.route("/icon-192.png")
-def pwa_icon_192():
-    return send_file(os.path.join(os.path.dirname(__file__), "icon-192.png"), mimetype="image/png", max_age=31536000)
-
-@app.route("/icon-512.png")
-def pwa_icon_512():
-    return send_file(os.path.join(os.path.dirname(__file__), "icon-512.png"), mimetype="image/png", max_age=31536000)
-
-@app.route("/app-icon.svg")
-def pwa_icon():
-    svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#111418"/><circle cx="256" cy="256" r="170" fill="#2f6fed"/><path d="M155 181h170c35 0 63 28 63 63v25c0 35-28 63-63 63h-42l-46 48v-48h-82c-35 0-63-28-63-63v-25c0-35 28-63 63-63z" fill="white"/><circle cx="205" cy="256" r="15" fill="#2f6fed"/><circle cx="256" cy="256" r="15" fill="#2f6fed"/><circle cx="307" cy="256" r="15" fill="#2f6fed"/></svg>'''
-    return Response(svg, mimetype="image/svg+xml")
-
-@app.route("/service-worker.js")
-def service_worker():
-    js = '''const CACHE="daxx-shell-v1";self.addEventListener("install",e=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",e=>{if(e.request.method!=="GET")return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));});'''
-    return Response(js, mimetype="application/javascript")
 
 @app.route("/live_time")
 @login_required_api
@@ -2866,7 +2325,6 @@ def chat():
         data = request.form.to_dict()
     user_message = str(data.get("message", "")).strip()
     chat_images = [f for f in request.files.getlist("images") if f and f.filename]
-    chat_documents = [f for f in request.files.getlist("documents") if f and f.filename]
     image_mode = str(data.get("image_mode", "analyze"))
     if len(chat_images) > 3:
         return jsonify({"error":"You can attach up to 3 images for analysis."}), 400
@@ -2903,27 +2361,7 @@ def chat():
                 save_memory(user_id, memory_text)
             break
 
-    user_message_id = save_message(conversation_id, "user", user_message)
-
-    # Persist uploaded images/documents so they remain visible in the conversation.
-    persisted_image_parts = []
-    for f in chat_images[:3]:
-        raw = f.read()
-        if not raw: continue
-        mime = f.mimetype or "image/jpeg"
-        if mime not in ("image/jpeg","image/png","image/gif","image/webp"): continue
-        encoded = base64.b64encode(raw).decode("utf-8")
-        data_url = f"data:{mime};base64,{encoded}"
-        save_attachment(user_id, conversation_id, user_message_id, "image", f.filename or "image", mime, data_url=data_url)
-        persisted_image_parts.append({"type":"image_url","image_url":{"url":data_url}})
-    document_context = []
-    for f in chat_documents[:3]:
-        try:
-            extracted = extract_document_text(f)
-            save_attachment(user_id, conversation_id, user_message_id, "document", f.filename or "document", f.mimetype or "application/octet-stream", text_content=extracted)
-            document_context.append(f"DOCUMENT: {f.filename}\n{extracted}")
-        except ValueError as exc:
-            return jsonify({"error":str(exc)}),400
+    save_message(conversation_id, "user", user_message)
 
     rows = get_messages(conversation_id, user_id)
     memories = get_memories(user_id)
@@ -2965,20 +2403,27 @@ the supplied conversation or memory context.
                 "content": content
             })
 
-    # Current-turn image/document understanding. Persisted image data also lets
-    # later turns in the same conversation keep access to earlier images.
+    # Current-turn image understanding. Groq's Qwen 3.8 27B accepts up to
+    # three image inputs and can read screenshots, UI text, documents and photos.
     current_user_content = user_message
-    if persisted_image_parts or document_context:
-        if persisted_image_parts and image_mode == "analyze":
+    if chat_images:
+        if image_mode == "analyze":
             current_user_content = (
                 "Analyze the attached image(s) carefully. Read visible text/OCR, "
                 "inspect the UI or scene, identify errors and explain concrete "
                 "fixes when the user asks for troubleshooting. Do not pretend "
                 "you can see anything that is not visible.\n\n" + user_message
             )
-        if document_context:
-            current_user_content += "\n\n" + "\n\n".join(document_context)
-        parts = [{"type":"text","text":current_user_content}] + persisted_image_parts
+        parts = [{"type":"text","text":current_user_content}]
+        for f in chat_images:
+            raw = f.read()
+            if not raw: continue
+            mime = f.mimetype or "image/jpeg"
+            if mime not in ("image/jpeg","image/png","image/gif","image/webp"):
+                continue
+            encoded = base64.b64encode(raw).decode("utf-8")
+            parts.append({"type":"image_url","image_url":{"url":f"data:{mime};base64,{encoded}"}})
+        # Replace the just-saved text-only user message in the provider context.
         messages[-1] = {"role":"user","content":parts}
 
     force_web = str(request.form.get("force_web", "0")).lower() in ("1","true","yes","on") if request.form else False
@@ -3391,42 +2836,270 @@ def transcribe():
         }),500
 
 
-def _resize_image_for_flux(raw: bytes, max_side: int = 511, quality: int = 95) -> bytes:
-    """Convert an uploaded image to JPEG and keep both dimensions < 512px."""
+@app.route("/image_edit", methods=["POST"])
+@login_required_api
+def image_edit():
+    """
+    Dax image editor using Cloudflare Workers AI FLUX.2 Klein 9B.
+
+    Cloudflare supports up to 4 reference images for this model.
+    Reference images are resized to fit Cloudflare's <512x512 input limit.
+    """
+
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+
+    if not account_id or not api_token:
+        return jsonify({
+            "error": (
+                "Cloudflare is not configured. Add CLOUDFLARE_ACCOUNT_ID "
+                "and CLOUDFLARE_API_TOKEN to Render Environment Variables."
+            )
+        }), 500
+
+    prompt = str(request.form.get("prompt", "")).strip()
+    images = [
+        f for f in request.files.getlist("images")
+        if f and f.filename
+    ]
+
+    if not prompt:
+        return jsonify({
+            "error": "Please describe the final image you want Dax to create."
+        }), 400
+
+    # FLUX.2 Klein 9B supports a maximum of 4 reference images.
+    if len(images) > 4:
+        return jsonify({
+            "error": "Cloudflare FLUX.2 supports up to 4 reference photos."
+        }), 400
+
+    if not images:
+        return jsonify({
+            "error": "Please select at least one reference photo."
+        }), 400
+
     try:
-        source = Image.open(io.BytesIO(raw)).convert("RGB")
+        multipart_files = {}
+
+        for index, image in enumerate(images):
+            raw = image.read()
+            if not raw:
+                continue
+
+            # Cloudflare requires each reference image to be smaller than
+            # 512x512. Keep the full source as reference 1. For a single
+            # uploaded photo, also create a dedicated high-detail identity
+            # crop so the model gets more facial information than it can
+            # retain from the whole photo alone.
+            try:
+                source = Image.open(io.BytesIO(raw)).convert("RGB")
+                original_w, original_h = source.size
+                source.thumbnail((511, 511), Image.Resampling.LANCZOS)
+
+                output = io.BytesIO()
+                source.save(output, format="JPEG", quality=95, optimize=True)
+                image_bytes = output.getvalue()
+            except Exception as exc:
+                return jsonify({
+                    "error": f"Could not process reference photo {index + 1}: {exc}"
+                }), 400
+
+            multipart_files[f"input_image_{index}"] = (
+                f"reference_{index + 1}.jpg",
+                image_bytes,
+                "image/jpeg"
+            )
+
+            # Single-photo identity aid: a square crop from the upper/central
+            # area where a portrait face is normally located. It is deliberately
+            # generated from the same uploaded image, so it cannot introduce a
+            # second person's identity.
+            if len(images) == 1:
+                try:
+                    identity_source = Image.open(io.BytesIO(raw)).convert("RGB")
+                    w, h = identity_source.size
+                    crop_size = max(1, min(w, h, int(min(w, h) * 0.78)))
+                    center_x = w / 2.0
+                    center_y = h * 0.42
+                    left = int(max(0, min(w - crop_size, center_x - crop_size / 2)))
+                    top = int(max(0, min(h - crop_size, center_y - crop_size / 2)))
+                    crop = identity_source.crop((left, top, left + crop_size, top + crop_size))
+                    crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
+
+                    crop_output = io.BytesIO()
+                    crop.save(crop_output, format="JPEG", quality=97, optimize=True)
+                    identity_bytes = crop_output.getvalue()
+
+                    multipart_files["input_image_1"] = (
+                        "identity_reference.jpg",
+                        identity_bytes,
+                        "image/jpeg"
+                    )
+                except Exception:
+                    # The full reference remains usable even if the optional
+                    # identity crop cannot be produced.
+                    pass
+
+        if not multipart_files:
+            return jsonify({
+                "error": "The uploaded images could not be read."
+            }), 400
+
+        if len(multipart_files) == 1:
+            final_prompt = f"""
+Edit the single supplied reference photo into ONE finished photorealistic image.
+
+USER INSTRUCTION:
+{prompt}
+
+SINGLE-PHOTO EDITING RULES:
+- The first supplied image is the FULL ORIGINAL PHOTO and is the primary composition/source reference.
+- If a second supplied image is present, it is an IDENTITY-ONLY FACE REFERENCE cropped from the same original photo. It is NOT a second person and must never be pasted in as a separate face or duplicate subject.
+- Use the identity reference to preserve the exact person's facial structure and recognizable identity: face shape, forehead, eyes, eyebrows, nose, nostrils, lips, mouth shape, cheeks, jawline, chin, ears, hairline, skin tone, natural asymmetry, facial hair and skin texture.
+- Preserve the same person and recognizable identity as strongly as possible. Do not redesign, beautify, age, or replace the face unless the user explicitly asks for a face change.
+- Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.
+- Make ONLY the changes requested by the user; do not invent extra changes.
+- If the user asks for a face swap, use the supplied face/reference as the identity source and blend it naturally into the target image.
+- If the user asks to change clothing, pose, lighting, background, or photography style, change those requested elements while keeping everything else consistent.
+- Keep realistic skin texture, natural asymmetry, facial proportions, shadows, highlights, perspective, lens characteristics, and photographic detail.
+- Do not duplicate the subject, split the image, create a collage, or place the source beside the result.
+- Do not output multiple images.
+- Produce ONE coherent final photograph.
+""".strip()
+        else:
+            final_prompt = f"""
+Create ONE final photorealistic image using the supplied reference images.
+
+USER INSTRUCTION:
+{prompt}
+
+MULTI-PHOTO EDITING RULES:
+- There are multiple reference images, so combine only the visual elements that are relevant to the user's instruction.
+- Do NOT automatically blend every person, object, face, background, or feature from every reference.
+- Decide which reference supplies the subject, identity, clothing, pose, background, lighting, or style based on the user's instruction.
+- Preserve recognizable identity when a face reference is supplied.
+- Follow the user's requested composition exactly.
+- Keep the result as ONE coherent photorealistic photograph.
+- Do not create a collage or place reference images side by side.
+- Do not output multiple images.
+- Avoid duplicate people, duplicate faces, extra fingers, malformed hands, warped objects, halos, seams, or obvious compositing artifacts.
+""".strip()
+
+        form_data = {
+            "prompt": final_prompt,
+            "width": "1024",
+            "height": "1024"
+        }
+
+        url = (
+            "https://api.cloudflare.com/client/v4/accounts/"
+            f"{account_id}/ai/run/@cf/black-forest-labs/flux-2-klein-9b"
+        )
+
+        result = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_token}"
+            },
+            data=form_data,
+            files=multipart_files,
+            timeout=240
+        )
+
+        if not result.ok:
+            try:
+                error_data = result.json()
+                errors = error_data.get("errors") or []
+                messages = error_data.get("messages") or []
+                detail = (
+                    errors[0].get("message")
+                    if errors and isinstance(errors[0], dict)
+                    else None
+                ) or (
+                    messages[0].get("message")
+                    if messages and isinstance(messages[0], dict)
+                    else None
+                ) or result.text
+            except Exception:
+                detail = result.text
+
+            return jsonify({
+                "error": f"Cloudflare image error ({result.status_code}): {detail}"
+            }), 502
+
+        # Workers AI returns JSON containing result.image as base64 for this model.
+        content_type = result.headers.get("Content-Type", "")
+        b64_image = None
+
+        if "application/json" in content_type:
+            result_data = result.json()
+            model_result = result_data.get("result") or {}
+            b64_image = model_result.get("image")
+
+            # Be tolerant of a future response wrapper.
+            if not b64_image:
+                b64_image = result_data.get("image")
+
+        if b64_image:
+            if b64_image.startswith("data:image/"):
+                image_url = b64_image
+            else:
+                image_url = f"data:image/jpeg;base64,{b64_image}"
+        else:
+            # Fallback in case the API returns the generated image as raw bytes.
+            raw_output = result.content
+            if not raw_output:
+                return jsonify({
+                    "error": "Cloudflare returned no generated image."
+                }), 502
+
+            encoded = base64.b64encode(raw_output).decode("utf-8")
+            media_type = content_type.split(";")[0] or "image/jpeg"
+            image_url = f"data:{media_type};base64,{encoded}"
+
+        image_id = save_dax_image(
+            get_current_user_id(),
+            None,
+            image_url,
+            "Dax generated image"
+        )
+
+        return jsonify({
+            "success": True,
+            "image_id": image_id,
+            "image_url": image_url,
+            "model": "@cf/black-forest-labs/flux-2-klein-9b",
+            "reference_count": len(multipart_files),
+            "identity_reference_added": len(images) == 1 and "input_image_1" in multipart_files
+        })
+
+    except requests.Timeout:
+        return jsonify({
+            "error": "Image generation timed out. Please try again."
+        }), 504
+
+    except requests.RequestException as exc:
+        return jsonify({
+            "error": f"Could not contact Cloudflare: {exc}"
+        }), 502
+
     except Exception as exc:
-        raise ValueError(f"Invalid image: {exc}") from exc
-
-    source.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-    output = io.BytesIO()
-    source.save(output, format="JPEG", quality=quality, optimize=True)
-    return output.getvalue()
+        return jsonify({
+            "error": f"Image generation failed: {exc}"
+        }), 500
 
 
-def _make_identity_reference(raw: bytes) -> bytes:
-    """Create an optional square portrait-focused reference from one upload."""
-    try:
-        source = Image.open(io.BytesIO(raw)).convert("RGB")
-        width, height = source.size
-        crop_size = max(1, int(min(width, height) * 0.78))
-        center_x = width / 2.0
-        center_y = height * 0.42
-        left = int(max(0, min(width - crop_size, center_x - crop_size / 2)))
-        top = int(max(0, min(height - crop_size, center_y - crop_size / 2)))
-        crop = source.crop((left, top, left + crop_size, top + crop_size))
-        crop.thumbnail((511, 511), Image.Resampling.LANCZOS)
+if __name__=="__main__":
 
-        output = io.BytesIO()
-        crop.save(output, format="JPEG", quality=97, optimize=True)
-        return output.getvalue()
-    except Exception as exc:
-        raise ValueError(f"Could not create identity reference: {exc}") from exc
+    port=int(
+        os.environ.get(
+            "PORT",
+            "5000"
+        )
+    )
 
-
-def _build_image_edit_prompt(user_prompt, single_photo):
-    if single_photo:
-        rules = "\n".join([
-            "SINGLE-PHOTO EDITING RULES:",
-            "- The first supplied image is the full original photo and is the primary composition/source reference.",
-            "- If image 1 is present, it is an identity-only crop made fro
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
