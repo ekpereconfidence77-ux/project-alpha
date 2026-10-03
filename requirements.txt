@@ -1,7 +1,7 @@
-Flask
-requests
-Pillow
-Werkzeug
-pypdf
-python-docx
-gunicorn
+Flask>=3.0,<4
+Werkzeug>=3.0,<4
+requests>=2.31,<3
+Pillow>=10,<13
+pypdf>=5,<7
+python-docx>=1.1,<2
+gunicorn>=23,<24
