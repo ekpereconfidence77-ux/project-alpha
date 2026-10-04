@@ -10,8 +10,12 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, request, jsonify, make_response, render_template_string, redirect, session, Response, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+# Render terminates TLS at the proxy. Trust the forwarded host/protocol so
+# OAuth redirect URLs are generated as https://... instead of http://....
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Production must use an environment-provided secret. Keep the local fallback
 # only for development so a missing Render secret fails loudly and clearly.
@@ -46,7 +50,12 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 CHAT_MODEL = "openrouter/free"
 GROQ_CHAT_MODEL = os.environ.get("GROQ_CHAT_MODEL") or "openai/gpt-oss-120b"
-GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
+GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL") or "qwen/qwen3.8-27b"
+# Image editing uses Pollinations only. No paid or Qwen fallback is required.
+POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "").strip()
+POLLINATIONS_EDIT_MODELS = [
+    m.strip() for m in os.environ.get("POLLINATIONS_EDIT_MODELS", "kontext,p-image-edit").split(",") if m.strip()
+]
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
@@ -54,6 +63,14 @@ GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+def _google_redirect_uri():
+    """Return the OAuth callback URI, preferring the explicit Render setting."""
+    configured = GOOGLE_REDIRECT_URI.rstrip("/")
+    if configured:
+        return configured
+    return request.url_root.rstrip("/") + "/auth/google/callback"
 
 
 def init_db():
@@ -417,167 +434,21 @@ def login_required_api(fn):
 
 
 LOGIN_HTML = r"""
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Dax — Sign in</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Daxx — Log in</title>
 <style>
-*{box-sizing:border-box}
-html,body{width:100%;height:100%;margin:0;padding:0}
-body{background:#0b0d0f;color:#f7f7f8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;height:100dvh;overflow:hidden;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-button,input,textarea{font:inherit}button{touch-action:manipulation}::selection{background:#315da8;color:#fff}
-
-/* ===== DAXX: NORMAL CHATGPT-LIKE RESPONSIVE SHELL ===== */
-#sidebar{position:fixed;inset:0 auto 0 0;width:260px;height:100dvh;background:#17181b;border-right:1px solid #2a2c30;padding:10px;display:flex;flex-direction:column;z-index:1000;overflow:hidden}
-#sidebar>div:first-child{padding:8px 8px 14px!important}
-#sidebar strong{font-size:20px!important;font-weight:700}
-#sidebar .side-tool{width:100%;height:44px;border:0;border-radius:10px;background:transparent;color:#e8e8e8;text-align:left;padding:0 12px;margin:1px 0;font-size:14px;cursor:pointer}
-#sidebar .side-tool:hover,#sidebar .side-tool:active{background:#24262a}
-#sidebar .section-label{font-size:11px;font-weight:700;color:#8a8d93;padding:18px 10px 7px}
-#newChat{width:100%;height:44px;padding:0 13px;border:1px solid #3a3c40;border-radius:10px;background:#24262a;color:#fff;font-size:14px;margin-bottom:10px;cursor:pointer}
-#history{overflow-y:auto;flex:1;min-height:0;padding-right:2px}
-.history-item{padding:10px 11px;border-radius:9px;margin-bottom:3px;color:#d7d7d9;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
-.history-item:hover,.history-item.active{background:#2a2c30}
-#logoutButton{background:#232529!important;border-color:#35373b!important}
-#historyOverlay{display:none}
-
-#main{margin-left:260px;width:calc(100% - 260px);height:100dvh;min-width:0;display:flex;flex-direction:column;background:#0b0d0f;position:relative}
-header{height:58px;min-height:58px;flex:0 0 58px;display:flex;align-items:center;padding:8px 16px;background:rgba(11,13,15,.94);border-bottom:1px solid #222428;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);position:relative;z-index:80}
-#topbar-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:16px;font-weight:650;color:#f5f5f5}
-#topbar-title>span:first-of-type{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#topbar-actions{margin-left:auto;display:flex;align-items:center;gap:2px}
-.topbar-btn{width:40px!important;height:40px!important;min-width:40px!important;border:0;border-radius:10px;background:transparent;color:#d8d8da;display:flex;align-items:center;justify-content:center;cursor:pointer}
-.topbar-btn:hover{background:#232529}.topbar-btn.active{background:#292c31;color:#fff}
-.topbar-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-#historyToggle{display:none;width:40px!important;height:40px!important;min-width:40px!important;margin:0!important;padding:0!important;background:transparent!important;color:#eee!important;border-radius:10px!important}
-#webModeNote{font-size:11px;color:#8ab4ff;display:none;margin-left:3px}
-#chatMoreMenu{position:absolute;right:12px;top:54px;z-index:200;display:none;width:230px;background:#202225;border:1px solid #35373b;border-radius:13px;box-shadow:0 16px 40px rgba(0,0,0,.42);padding:6px}
-#chatMoreMenu button{width:100%;height:auto;min-height:40px;text-align:left;border:0;background:transparent;color:#e7e7e9;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:14px}
-#chatMoreMenu button:hover{background:#2a2c30}
-
-#chat{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:30px 24px 24px;display:flex;flex-direction:column;gap:0;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
-#chat>*{width:min(768px,100%);margin-left:auto;margin-right:auto}
-.dax-welcome{width:min(768px,100%)!important;max-width:768px!important;margin:auto!important;padding:32px 8px 26px!important;text-align:center}
-.dax-welcome h1{margin:0 0 8px;font-size:28px;font-weight:650;letter-spacing:-.4px}
-.dax-welcome p{margin:0 0 22px;color:#9a9da3;font-size:15px}
-.dax-suggestions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;text-align:left}
-.dax-suggestion{width:100%;min-height:74px;border:1px solid #303236;border-radius:14px;background:#17191c;color:#e8e8ea;padding:13px 14px;cursor:pointer;font-size:14px;line-height:1.4;text-align:left}
-.dax-suggestion:hover{background:#202226;border-color:#424449}
-.dax-suggestion strong{display:block;margin-bottom:4px;font-size:14px}.dax-suggestion span{display:block;color:#999ca2;font-size:12px}
-
-.message{width:min(768px,100%)!important;max-width:768px!important;margin:0 auto!important;padding:14px 8px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px}
-.user{align-self:center;display:flex;justify-content:flex-end;color:#fff}
-.user .message-body{background:#2f3033;border-radius:18px 18px 5px 18px;padding:10px 14px;max-width:min(78%,620px);text-align:left}
-.alpha{align-self:center;background:transparent;color:#f2f2f3}.alpha .message-body{max-width:100%;padding:2px 0;background:transparent}
-.message-body{line-height:1.65;overflow-wrap:anywhere}.message-body a{color:#8ab4ff;text-decoration:underline}.message-body code{background:#202226;border:1px solid #33353a;border-radius:6px;padding:2px 5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.message-body pre{background:#17191c;border:1px solid #2b2d31;border-radius:12px;padding:12px;overflow:auto}
-.message-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}.message-actions button{width:auto!important;min-width:34px!important;height:32px!important;border-radius:9px!important;background:#202226!important;color:#cfd0d3!important;padding:0 8px!important;font-size:12px!important}
-.typing{display:flex;align-items:center;gap:5px;color:#9aa0a8;padding:12px 8px}.typing span{width:7px;height:7px;border-radius:50%;background:#9aa0a8;animation:typing 1.2s infinite ease-in-out}.typing span:nth-child(2){animation-delay:.15s}.typing span:nth-child(3){animation-delay:.3s}@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}
-
-#status{flex:0 0 auto;width:min(768px,100%);max-width:768px;margin:0 auto;text-align:center;color:#92959b;font-size:12px;min-height:18px;padding:0 8px 5px}
-
-/* composer sits in normal main flow; this prevents overlap/squeezing */
-.composer-wrap{position:relative;flex:0 0 auto;width:100%;padding:6px 24px max(10px,env(safe-area-inset-bottom));background:linear-gradient(to top,#0b0d0f 82%,rgba(11,13,15,0));z-index:70}
-.composer{position:relative;width:min(768px,100%);min-height:52px;margin:0 auto;padding:5px 6px;display:flex;align-items:flex-end;gap:5px;background:#202123;border:1px solid #3a3b3e;border-radius:26px;box-shadow:0 2px 18px rgba(0,0,0,.28)}
-#message{flex:1 1 auto;width:auto;min-width:0;min-height:42px;max-height:150px;margin:0;padding:10px 8px;border:0;background:transparent;color:#f5f5f5;border-radius:20px;font-size:16px;line-height:1.4;resize:none;outline:none;box-shadow:none}
-#message:focus{border:0;box-shadow:none}input,textarea{font-family:inherit}
-#imageButton,#micButton,#sendButton{width:42px!important;height:42px!important;min-width:42px!important;flex:0 0 42px!important;margin:0;border-radius:50%!important;align-self:flex-end}
-#imageButton,#micButton{background:#2b2c30!important;color:#f1f2f3!important}#sendButton{background:#f4f4f4!important;color:#111214!important}.icon-button{display:flex;align-items:center;justify-content:center}.icon-button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#micButton.recording{background:#d22!important;animation:pulse 1s infinite}@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
-#attachmentMenu{display:none;position:absolute;left:max(24px,calc((100% - 768px)/2));bottom:66px;background:#202225;border:1px solid #35373b;border-radius:15px;padding:7px;box-shadow:0 12px 35px rgba(0,0,0,.42);z-index:100;min-width:220px}
-.attachment-option{display:flex;align-items:center;gap:10px;width:100%;height:42px!important;min-height:42px!important;border-radius:10px;background:transparent!important;text-align:left;padding:0 11px!important;font-size:14px!important}
-.attachment-option:hover{background:#2b2d31!important}
-#attachmentPreview{display:none;width:min(768px,100%);margin:0 auto;padding:4px 4px 6px;font-size:12px;color:#cdd3dc}
-#attachmentPreview img{width:54px;height:54px;object-fit:cover;border-radius:10px;margin-right:6px}
-#imagePanel{display:none;width:min(768px,100%);margin:0 auto;padding:12px;background:#181a1d;border:1px solid #2c2e32;border-radius:14px}
-#imageFile{width:100%;margin-bottom:8px;color:#cdd3dc}#imagePreview{display:flex;gap:8px;overflow-x:auto;margin-bottom:8px}#imagePrompt{width:100%;margin-bottom:8px;border-radius:12px}#editButton{background:#7b3cff;width:100%;height:46px;border-radius:12px;padding:0 12px}.image-result{max-width:100%;border-radius:12px;display:block}.download-image{display:inline-block;margin-top:8px;padding:9px 12px;border-radius:9px;background:#2b6cff;color:white;text-decoration:none}
-
-#popoutPanel{display:none;position:fixed;inset:0;z-index:1200;background:#111315;overflow:auto}#popoutHeader{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:12px 18px;background:#181a1d;border-bottom:1px solid #2a2c30}#popoutTitle{font-size:19px;font-weight:700;flex:1}#popoutClose{width:42px;height:42px;background:#303238;border-radius:50%}.popout-content{max-width:900px;margin:0 auto;padding:20px}.popout-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}.popout-card{background:#1b1d20;border:1px solid #303236;border-radius:14px;padding:14px;color:#fff;text-align:left}.library-img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;display:block;margin-bottom:8px}.search-box{width:100%;border-radius:12px;margin-bottom:14px}
-.install-banner{position:fixed;left:16px;right:16px;bottom:16px;z-index:1300;max-width:420px;margin:auto;background:#24262a;border:1px solid #3a3c40;border-radius:14px;padding:14px;box-shadow:0 12px 35px rgba(0,0,0,.4)}
-
-/* tablet/phone: sidebar becomes the ChatGPT-style drawer */
-@media(max-width:800px){
-  #sidebar{width:292px;max-width:86vw;transform:translateX(-105%);box-shadow:18px 0 45px rgba(0,0,0,.45);transition:transform .22s ease}
-  body.history-open #sidebar{transform:translateX(0)}
-  #historyOverlay{position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.58)}
-  body.history-open #historyOverlay{display:block}
-  #main{margin-left:0;width:100%;height:100dvh}
-  header{height:56px;min-height:56px;flex-basis:56px;padding:6px 8px}
-  #historyToggle{display:flex!important;align-items:center;justify-content:center}
-  #topbar-title{flex:1;justify-content:center}
-  #topbar-actions{margin-left:0}
-  #chat{padding:18px 14px 16px}
-  #chat>*{width:100%;max-width:768px}
-  .message{padding:12px 2px;font-size:15.8px}
-  .user .message-body{max-width:86%}
-  .dax-welcome{padding:22px 2px 20px!important}
-  .dax-welcome h1{font-size:26px}
-  .dax-suggestions{grid-template-columns:1fr 1fr}
-  .composer-wrap{padding:6px 10px max(9px,env(safe-area-inset-bottom))}
-  .composer{width:100%}
-  #status{width:100%;padding-bottom:4px}
-  #attachmentMenu{left:8px;bottom:64px}
-}
-@media(max-width:520px){
-  .dax-suggestions{grid-template-columns:1fr}
-  .dax-suggestion{min-height:64px}
-  #topbar-actions .topbar-btn:nth-child(2){display:none}
-}
-@media(max-width:380px){
-  #topbar-actions .topbar-btn:nth-child(1){display:none}
-  .dax-welcome h1{font-size:23px}
-  #imageButton,#micButton,#sendButton{width:40px!important;height:40px!important;min-width:40px!important;flex-basis:40px!important}
-}
- .or{display:flex;align-items:center;gap:10px;margin:16px 0;color:#858991;font-size:12px}.or:before,.or:after{content:"";height:1px;flex:1;background:#303238}.google-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:46px;border:1px solid #3a3c41;border-radius:12px;background:#fff;color:#1f1f1f;text-decoration:none;font-weight:600;font-size:14px}.google-btn:active{transform:scale(.99)}.google-g{display:grid;place-items:center;width:22px;height:22px;font-weight:800;font-size:18px;color:#4285f4}
-</style>
-</head>
-<body>
-<div class="card">
-<div class="logo">Dax</div>
-<div class="sub">Your personal AI assistant</div>
-<div class="tabs">
-<button id="loginTab" class="active" onclick="showMode('login')">Log in</button>
-<button id="registerTab" onclick="showMode('register')">Create account</button>
-</div>
-<form onsubmit="submitAuth(event)">
-<label for="email">Email</label>
-<input id="email" type="email" autocomplete="email" required placeholder="you@example.com">
-<label for="password">Password</label>
-<input id="password" type="password" autocomplete="current-password" required placeholder="At least 8 characters">
-<div id="error" class="error"></div>
-<button id="submit" class="primary" type="submit">Log in</button>
-</form>
-<div class="or"><span>or</span></div>
-<a class="google-btn" href="/auth/google"><span class="google-g">G</span><span>Continue with Google</span></a>
-<div class="note">Use an email address and password, or continue with Google, to keep your Dax chats and memories connected to your account.</div>
-</div>
-<script>
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:#0b0d0f;color:#f7f7f8}body{min-height:100dvh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% -10%,#20242b 0,#0b0d0f 48%)}.login-shell{width:min(420px,100%)}.brand{text-align:center;margin-bottom:28px}.brand-mark{width:48px;height:48px;border-radius:15px;margin:0 auto 14px;display:grid;place-items:center;background:#fff;color:#111;font-size:23px;font-weight:800}.brand h1{font-size:30px;line-height:1.15;margin:0 0 7px;letter-spacing:-.6px}.brand p{margin:0;color:#9b9fa7;font-size:14px}.card{background:#15171b;border:1px solid #2d3036;border-radius:18px;padding:24px;box-shadow:0 18px 60px rgba(0,0,0,.42)}.tabs{display:grid;grid-template-columns:1fr 1fr;background:#0f1114;border:1px solid #2b2e34;padding:3px;border-radius:11px;margin-bottom:22px}.tabs button{height:38px;border:0;border-radius:8px;background:transparent;color:#969ba4;font-weight:600;font-size:13px;cursor:pointer}.tabs button.active{background:#2a2d32;color:#fff}.field{margin-bottom:15px}label{display:block;margin:0 0 7px;font-size:13px;font-weight:600;color:#dfe1e5}input{width:100%;height:48px;border:1px solid #373a41;border-radius:11px;background:#0f1114;color:#fff;padding:0 13px;outline:none;font-size:15px}input:focus{border-color:#777d88;box-shadow:0 0 0 3px rgba(255,255,255,.05)}.primary{width:100%;height:48px;border:0;border-radius:11px;background:#fff;color:#111;font-weight:700;cursor:pointer;margin-top:2px}.primary:disabled{opacity:.55}.or{display:flex;align-items:center;gap:10px;color:#777c85;font-size:12px;margin:19px 0}.or:before,.or:after{content:"";height:1px;background:#2d3036;flex:1}.google-btn{height:48px;width:100%;border:1px solid #3a3d43;border-radius:11px;background:#fff;color:#1f1f1f;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:650;font-size:14px}.google-icon{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#4285f4;font-size:17px}.error{min-height:19px;color:#ff8e8e;font-size:13px;margin:4px 0 8px;line-height:1.4}.note{text-align:center;color:#777c85;font-size:11px;line-height:1.55;margin-top:17px}.security{text-align:center;color:#60656d;font-size:11px;margin-top:15px}@media(max-width:460px){body{padding:16px}.card{padding:20px;border-radius:16px}.brand{margin-bottom:22px}.brand h1{font-size:27px}}
+</style></head>
+<body><main class="login-shell"><div class="brand"><div class="brand-mark">D</div><h1>Welcome to Daxx</h1><p>Your personal AI assistant</p></div><section class="card"><div class="tabs"><button id="loginTab" class="active" type="button" onclick="showMode('login')">Log in</button><button id="registerTab" type="button" onclick="showMode('register')">Create account</button></div><form onsubmit="submitAuth(event)"><div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com" required></div><div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Your password" required></div><div id="error" class="error"></div><button id="submit" class="primary" type="submit">Log in</button></form><div class="or"><span>OR</span></div><a class="google-btn" href="/auth/google"><span class="google-icon">G</span><span>Continue with Google</span></a><div class="note">Your chats, files and memories stay connected to your Daxx account.</div></section><div class="security">Secure sign-in • Daxx</div></main><script>
 let mode='login';
-function showMode(next){
- mode=next;
- document.getElementById('loginTab').classList.toggle('active',mode==='login');
- document.getElementById('registerTab').classList.toggle('active',mode==='register');
- document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';
- document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';
- document.getElementById('error').textContent='';
- const q=new URLSearchParams(location.search); if(q.get('google_error')) document.getElementById('error').textContent=q.get('google_error');
-}
-async function submitAuth(e){
- e.preventDefault();
- const button=document.getElementById('submit');
- const error=document.getElementById('error');
- error.textContent=''; button.disabled=true;
- try{
-   const r=await fetch(mode==='login'?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
-   const d=await r.json();
-   if(!r.ok) throw new Error(d.error||'Authentication failed.');
-   location.href='/';
- }catch(err){error.textContent=err.message;}finally{button.disabled=false;}
-}
-</script>
-</body>
-</html>
+function showMode(next){mode=next;document.getElementById('loginTab').classList.toggle('active',mode==='login');document.getElementById('registerTab').classList.toggle('active',mode==='register');document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';document.getElementById('password').placeholder=mode==='login'?'Your password':'At least 8 characters';document.getElementById('error').textContent='';}
+const params=new URLSearchParams(location.search);if(params.get('google_error'))document.getElementById('error').textContent=params.get('google_error').replace(/\+/g,' ');
+async function submitAuth(e){e.preventDefault();const b=document.getElementById('submit'),err=document.getElementById('error');b.disabled=true;err.textContent='';try{const r=await fetch(mode==='login'?'/login':'/register',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({email:document.getElementById('email').value.trim(),password:document.getElementById('password').value})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Authentication failed.');location.replace('/');}catch(x){err.textContent=x.message||'Authentication failed.'}finally{b.disabled=false}}
+</script></body></html>
 """
 
 
@@ -1205,6 +1076,50 @@ header{position:relative!important;top:auto!important;left:auto!important;right:
   .composer-wrap{left:calc(50% - 380px)!important;right:calc(50% - 380px)!important;width:760px!important}
 }
 
+
+/* ===== DAXX GPT-STYLE FINAL LAYOUT ===== */
+@media(min-width:801px){
+  body{display:flex!important;background:#0b0d0f!important}
+  #sidebar{display:flex!important;position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:260px!important;max-width:none!important;transform:none!important;background:#17181b!important}
+  body.history-open #sidebar{transform:none!important}
+  #historyToggle{display:none!important}
+  #main{width:calc(100% - 260px)!important;max-width:none!important;margin-left:260px!important;margin-right:0!important;height:100dvh!important;border:0!important}
+  #chat{padding-left:24px!important;padding-right:24px!important}
+  .composer-wrap{left:260px!important;right:0!important;width:auto!important}
+}
+@media(max-width:800px){
+  #sidebar{display:flex!important;transform:translateX(-105%)!important}
+  body.history-open #sidebar{transform:translateX(0)!important}
+  #main{margin:0!important;width:100%!important;max-width:none!important;border:0!important}
+}
+#sidebar .side-tool,#newChat{font-weight:500}#sidebar .section-label{letter-spacing:.08em}.history-item{font-size:13px!important}.dax-welcome{max-width:760px!important}.dax-welcome h1{font-size:30px!important}.message{max-width:760px!important}.alpha .message-body{font-size:16px}.user .message-body{background:#2f3033!important}.composer-wrap{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+
+/* DAXX MOBILE-FIRST ONLY: phone is the canonical layout. */
+@media (min-width: 601px){
+  html,body{width:100%!important;max-width:600px!important;min-width:0!important;margin:0 auto!important;overflow:hidden!important;background:#0b0d0f!important;}
+  body{display:flex!important;position:relative!important;}
+  #sidebar{width:292px!important;max-width:292px!important;transform:translateX(-105%)!important;transition:transform .2s ease!important;box-shadow:18px 0 40px rgba(0,0,0,.45)!important;}
+  body.history-open #sidebar{transform:translateX(0)!important;}
+  #historyToggle{display:flex!important;}
+  #main{margin-left:0!important;width:100%!important;max-width:600px!important;height:100dvh!important;}
+  header{height:56px!important;min-height:56px!important;padding:7px 10px!important;}
+  #chat{padding:20px 12px 16px!important;}
+  #chat>*{width:100%!important;max-width:100%!important;}
+  .message{width:100%!important;max-width:100%!important;padding:12px 4px!important;font-size:15px!important;}
+  .user .message-body{max-width:88%!important;}
+  .composer-wrap{width:100%!important;padding:5px 8px max(9px,env(safe-area-inset-bottom))!important;}
+  .composer{width:100%!important;}
+  #attachmentMenu{left:8px!important;right:8px!important;width:auto!important;}
+  #imagePanel,#attachmentPreview,#status{width:100%!important;max-width:100%!important;}
+  .dax-welcome{width:100%!important;padding:22px 4px!important;}
+  .dax-welcome h1{font-size:24px!important;}
+}
+@media (max-width:380px){
+  .dax-suggestions{grid-template-columns:1fr!important;}
+  #imageButton,#micButton,#sendButton{width:38px!important;height:38px!important;min-width:38px!important;flex-basis:38px!important;}
+  #message{font-size:15px!important;}
+}
+
 </style>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#111418"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png"><link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
 </head>
@@ -1274,13 +1189,12 @@ header{position:relative!important;top:auto!important;left:auto!important;right:
         id="imageFile"
         type="file"
         accept="image/*"
-        multiple
     >
 
     <div id="imagePreview"></div>
 
     <div style="font-size:13px;opacity:.75;margin:6px 0">
-        Add photos only when you want Dax to use them for this image request. They are cleared automatically after a successful edit.
+        Add one photo when you want Dax to edit it. It is cleared automatically after a successful edit.
     </div>
 
     <div
@@ -1292,14 +1206,14 @@ header{position:relative!important;top:auto!important;left:auto!important;right:
 
     <input
         id="imagePrompt"
-        placeholder="Tell Dax how to edit the selected photos..."
+        placeholder="Tell Dax how to edit this photo..."
     >
 
     <button
         id="editButton"
         onclick="editImage()"
     >
-        🎨 Edit Selected Photos
+        🎨 Edit Photo
     </button>
 
 </div>
@@ -1956,18 +1870,14 @@ async function editImage(){
         .trim();
 
     if(!files.length){
-        alert("Select one or more photos first.");
+        alert("Select one photo first.");
         return;
     }
 
-    if(files.length>4){
-        alert("Please select up to 4 photos at a time.");
-        return;
-    }
 
     if(!prompt){
         alert(
-            "Tell Dax what you want it to do with the selected photos."
+            "Tell Dax what you want changed in the photo."
         );
         return;
     }
@@ -1987,7 +1897,7 @@ async function editImage(){
 
     setStatus(
         `🎨 Dax is editing ${files.length} photo`+
-        `${files.length===1?"":"s"} with FLUX.2 Klein 9B...`
+        `${files.length===1?"":"s"} with the free AI image editor...`
     );
 
     const button=document.getElementById("editButton");
@@ -2485,7 +2395,7 @@ def google_login():
     session["google_oauth_state"] = state
     params = {
         "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
+        "redirect_uri": _google_redirect_uri(),
         "response_type": "code",
         "scope": "openid email profile",
         "state": state,
@@ -2499,7 +2409,9 @@ def google_login():
 @app.route("/auth/google/callback")
 def google_callback():
     if request.args.get("error"):
-        return redirect("/login?google_error=Google+sign-in+was+cancelled.")
+        detail = request.args.get("error_description") or request.args.get("error")
+        from urllib.parse import quote_plus
+        return redirect("/login?google_error=" + quote_plus("Google sign-in was not completed: " + detail))
     state = request.args.get("state", "")
     expected = session.pop("google_oauth_state", "")
     if not state or not expected or state != expected:
@@ -2512,7 +2424,7 @@ def google_callback():
             "code": code,
             "client_id": GOOGLE_CLIENT_ID,
             "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI or (request.url_root.rstrip("/") + "/auth/google/callback"),
+            "redirect_uri": _google_redirect_uri(),
             "grant_type": "authorization_code",
         }, timeout=20)
         token_r.raise_for_status()
@@ -2546,9 +2458,11 @@ def google_callback():
         session.clear()
         session["user_id"] = user_id
         return redirect("/")
-    except Exception:
+    except Exception as exc:
         app.logger.exception("Google OAuth callback failed")
-        return redirect("/login?google_error=Google+sign-in+failed.+Please+try+again.")
+        from urllib.parse import quote_plus
+        detail = str(exc).strip() or "Unknown Google OAuth error"
+        return redirect("/login?google_error=" + quote_plus("Google sign-in failed: " + detail[:240]))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -3424,18 +3338,135 @@ def _make_identity_reference(raw: bytes) -> bytes:
         raise ValueError(f"Could not create identity reference: {exc}") from exc
 
 
+
 def _build_image_edit_prompt(user_prompt, single_photo):
+    base = user_prompt.strip()
     if single_photo:
-       rules = "\n".join([
-    "SINGLE-PHOTO EDITING RULES:",
-    "- The first supplied image is the full original photo and is the primary composition/source reference.",
-    "- If image 1 is present, it is an identity-only crop made from the same original photo.",
-    "- Never treat image 1 as a second person or duplicate subject.",
-    "- Preserve the person's recognizable identity: face shape, eyes, eyebrows, nose, lips, cheeks, jaw, chin, ears, hairline, skin tone, natural asymmetry, facial hair, and skin texture.",
-    "- Preserve the original composition, pose, proportions, hairstyle, clothing, accessories, and background unless the user explicitly asks to change them.",
-    "- Make only the changes requested by the user; do not invent additional changes.",
-    "- If a face swap is explicitly requested, use the supplied identity reference and blend it naturally into the target.",
-    "- Keep realistic skin texture, lighting, perspective, shadows, highlights, and photographic detail.",
-    "- Do not duplicate the subject, split the image, create a collage, or place the source beside the result.",
-    "- Produce exactly ONE coherent final photograph.",
-]) 
+        return ("Edit the supplied photograph according to the user's request. "
+                "Preserve the person's identity, facial structure, natural skin texture, pose, clothing, "
+                "composition and background unless the user explicitly asks to change them. "
+                "Make only the requested changes. Produce one coherent final photograph.\n\nUSER REQUEST: " + base)
+    return ("Edit the supplied reference photos according to the user's request. "
+            "Use the images as references and follow the requested composition carefully. "
+            "Do not duplicate subjects or create a collage unless explicitly requested. "
+            "Produce one coherent final image.\n\nUSER REQUEST: " + base)
+
+
+def _image_data_url(raw: bytes) -> str:
+    """Normalize an uploaded image for OpenAI-compatible image-to-image APIs."""
+    source = Image.open(io.BytesIO(raw)).convert("RGB")
+    source.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    source.save(buf, format="JPEG", quality=94, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _save_edited_image(user_id, conversation_id, image_bytes, provider):
+    out = io.BytesIO()
+    Image.open(io.BytesIO(image_bytes)).convert("RGB").save(out, format="JPEG", quality=92, optimize=True)
+    final_data_url = "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+    image_id = save_dax_image(user_id, conversation_id, final_data_url, "Dax edited image")
+    return final_data_url, image_id, provider
+
+
+def _pollinations_edit(raw: bytes, prompt: str):
+    if not POLLINATIONS_API_KEY:
+        raise RuntimeError("POLLINATIONS_API_KEY is not configured")
+    last_error = None
+    for model in POLLINATIONS_EDIT_MODELS:
+        try:
+            image_file = io.BytesIO(raw)
+            image_file.name = "dax_photo.jpg"
+            files = {"image": ("dax_photo.jpg", image_file, "image/jpeg")}
+            data = {
+                "prompt": _build_image_edit_prompt(prompt, True),
+                "model": model,
+                "size": "1024x1024",
+            }
+            r = requests.post(
+                "https://gen.pollinations.ai/v1/images/edits",
+                headers={"Authorization": f"Bearer {POLLINATIONS_API_KEY}"},
+                files=files,
+                data=data,
+                timeout=180,
+            )
+            if not r.ok:
+                raise RuntimeError(f"Pollinations {model}: HTTP {r.status_code}: {r.text[:500]}")
+            payload = r.json()
+            item = (payload.get("data") or [{}])[0]
+            if item.get("b64_json"):
+                return base64.b64decode(item["b64_json"]), f"Pollinations/{model}"
+            if item.get("url"):
+                img = requests.get(item["url"], timeout=120)
+                img.raise_for_status()
+                return img.content, f"Pollinations/{model}"
+            raise RuntimeError(f"Pollinations {model}: response contained no image")
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(str(last_error or "Pollinations image editing failed"))
+
+
+
+@app.route("/image_edit", methods=["POST"])
+@login_required_api
+def image_edit():
+    """Image editing through Pollinations' configured edit models.
+
+    Pollinations tries the models in POLLINATIONS_EDIT_MODELS order, so a
+    failed first model can fall through to the next configured model.
+    No paid or Qwen provider is selected automatically.
+    """
+    prompt = str(request.form.get("prompt", "")).strip()
+    files = [f for f in request.files.getlist("images") if f and f.filename]
+    if not prompt:
+        return jsonify({"error": "Tell Dax what you want changed in the image."}), 400
+    if not files:
+        return jsonify({"error": "Select an image first."}), 400
+    if len(files) > 1:
+        return jsonify({"error": "Free image editing currently supports one image at a time."}), 400
+
+    f = files[0]
+    if not (f.mimetype or "").startswith("image/"):
+        return jsonify({"error": "The selected file is not an image."}), 400
+    try:
+        raw = f.read()
+        if not raw:
+            return jsonify({"error": "The selected image is empty."}), 400
+        if len(raw) > 8 * 1024 * 1024:
+            return jsonify({"error": "For free editing, keep the image below 8 MB."}), 400
+        # Validate and normalize once before sending to providers.
+        source = Image.open(io.BytesIO(raw)).convert("RGB")
+        source.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        source.save(buf, format="JPEG", quality=94, optimize=True)
+        raw = buf.getvalue()
+
+        user_id = get_current_user_id()
+        cid = request.form.get("conversation_id")
+        try:
+            cid = int(cid) if cid else None
+        except Exception:
+            cid = None
+        if cid and not conversation_belongs_to_user(cid, user_id):
+            cid = None
+
+        if not POLLINATIONS_API_KEY:
+            return jsonify({
+                "error": "Image editing is not configured. Add POLLINATIONS_API_KEY in Render Environment Variables."
+            }), 503
+
+        try:
+            edited_bytes, provider_name = _pollinations_edit(raw, prompt)
+            final_data_url, image_id, provider_name = _save_edited_image(
+                user_id, cid, edited_bytes, provider_name
+            )
+            return jsonify({
+                "image_url": final_data_url,
+                "image_id": image_id,
+                "provider": provider_name,
+            })
+        except Exception as exc:
+            app.logger.warning("Pollinations image editor failed: %s", exc)
+            return jsonify({
+                "error": "Image edi
+Preview truncated for large file
