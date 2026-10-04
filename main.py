@@ -1860,9 +1860,10 @@ function toggleImagePanel(){
 
 async function editImage(){
 
-    const files=Array.from(
+    const selectedFiles=Array.from(
         document.getElementById("imageFile").files||[]
     );
+    const files=selectedFiles.slice(0,1);
 
     const prompt=document
         .getElementById("imagePrompt")
@@ -1882,22 +1883,18 @@ async function editImage(){
         return;
     }
 
-    const totalBytes=files.reduce(
-        (sum,f)=>sum+f.size,
-        0
-    );
+    if(files.length!==1){
+        alert("Please select one photo at a time.");
+        return;
+    }
 
-    if(totalBytes>30*1024*1024){
-        alert(
-            "The selected photos are too large together. "+
-            "Please keep the total under 30 MB."
-        );
+    if(files[0].size>8*1024*1024){
+        alert("Please keep the photo below 8 MB for free editing.");
         return;
     }
 
     setStatus(
-        `🎨 Dax is editing ${files.length} photo`+
-        `${files.length===1?"":"s"} with the free AI image editor...`
+        "🎨 Dax is editing your photo with the free AI image editor..."
     );
 
     const button=document.getElementById("editButton");
@@ -3468,5 +3465,5 @@ def image_edit():
         except Exception as exc:
             app.logger.warning("Pollinations image editor failed: %s", exc)
             return jsonify({
-                "error": f"Image ed
+                "error": f"Image editing failed. Please try again or check the
 Preview truncated for large file
