@@ -3462,8 +3462,14 @@ def image_edit():
                 "image_id": image_id,
                 "provider": provider_name,
             })
-        except Exception as exc:
+                except Exception as exc:
             app.logger.warning("Pollinations image editor failed: %s", exc)
             return jsonify({
-                "error": f"Image editing failed. Please try again or check the
-Preview truncated for large file
+                "error": f"Image editing failed. Please try again or check the provider: {exc}"
+            }), 502
+
+    except Exception as exc:
+        app.logger.exception("Image edit request failed: %s", exc)
+        return jsonify({
+            "error": f"Image processing failed: {exc}"
+        }), 500
