@@ -3452,21 +3452,15 @@ def image_edit():
                 "error": "Image editing is not configured. Add POLLINATIONS_API_KEY in Render Environment Variables."
             }), 503
 
-        try:
-            edited_bytes, provider_name = _pollinations_edit(raw, prompt)
-            final_data_url, image_id, provider_name = _save_edited_image(
-                user_id, cid, edited_bytes, provider_name
-            )
-            return jsonify({
-                "image_url": final_data_url,
-                "image_id": image_id,
-                "provider": provider_name,
-            })
-                except Exception as exc:
-            app.logger.warning("Pollinations image editor failed: %s", exc)
-            return jsonify({
-                "error": f"Image editing failed. Please try again or check the provider: {exc}"
-            }), 502
+        edited_bytes, provider_name = _pollinations_edit(raw, prompt)
+        final_data_url, image_id, provider_name = _save_edited_image(
+            user_id, cid, edited_bytes, provider_name
+        )
+        return jsonify({
+            "image_url": final_data_url,
+            "image_id": image_id,
+            "provider": provider_name,
+        })
 
     except Exception as exc:
         app.logger.exception("Image edit request failed: %s", exc)
