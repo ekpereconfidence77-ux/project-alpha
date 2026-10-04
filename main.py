@@ -442,7 +442,7 @@ LOGIN_HTML = r"""
 <title>Daxx — Log in</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:#0b0d0f;color:#f7f7f8}body{min-height:100dvh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% -10%,#20242b 0,#0b0d0f 48%)}.login-shell{width:min(420px,100%)}.brand{text-align:center;margin-bottom:28px}.brand-mark{width:48px;height:48px;border-radius:15px;margin:0 auto 14px;display:grid;place-items:center;background:#fff;color:#111;font-size:23px;font-weight:800}.brand h1{font-size:30px;line-height:1.15;margin:0 0 7px;letter-spacing:-.6px}.brand p{margin:0;color:#9b9fa7;font-size:14px}.card{background:#15171b;border:1px solid #2d3036;border-radius:18px;padding:24px;box-shadow:0 18px 60px rgba(0,0,0,.42)}.tabs{display:grid;grid-template-columns:1fr 1fr;background:#0f1114;border:1px solid #2b2e34;padding:3px;border-radius:11px;margin-bottom:22px}.tabs button{height:38px;border:0;border-radius:8px;background:transparent;color:#969ba4;font-weight:600;font-size:13px;cursor:pointer}.tabs button.active{background:#2a2d32;color:#fff}.field{margin-bottom:15px}label{display:block;margin:0 0 7px;font-size:13px;font-weight:600;color:#dfe1e5}input{width:100%;height:48px;border:1px solid #373a41;border-radius:11px;background:#0f1114;color:#fff;padding:0 13px;outline:none;font-size:15px}input:focus{border-color:#777d88;box-shadow:0 0 0 3px rgba(255,255,255,.05)}.primary{width:100%;height:48px;border:0;border-radius:11px;background:#fff;color:#111;font-weight:700;cursor:pointer;margin-top:2px}.primary:disabled{opacity:.55}.or{display:flex;align-items:center;gap:10px;color:#777c85;font-size:12px;margin:19px 0}.or:before,.or:after{content:"";height:1px;background:#2d3036;flex:1}.google-btn{height:48px;width:100%;border:1px solid #3a3d43;border-radius:11px;background:#fff;color:#1f1f1f;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:650;font-size:14px}.google-icon{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#4285f4;font-size:17px}.error{min-height:19px;color:#ff8e8e;font-size:13px;margin:4px 0 8px;line-height:1.4}.note{text-align:center;color:#777c85;font-size:11px;line-height:1.55;margin-top:17px}.security{text-align:center;color:#60656d;font-size:11px;margin-top:15px}@media(max-width:460px){body{padding:16px}.card{padding:20px;border-radius:16px}.brand{margin-bottom:22px}.brand h1{font-size:27px}}
-</style></head>
+</style>\n<style id="daxx-chatgpt-style-fix">\n/* DAXX CHATGPT-STYLE MESSAGE CONTROLS */\n.message-actions{\n    display:flex!important;\n    align-items:center!important;\n    justify-content:flex-start!important;\n    flex-wrap:nowrap!important;\n    gap:4px!important;\n    width:100%!important;\n    margin-top:4px!important;\n    padding:0 2px!important;\n    min-height:28px!important;\n}\n.message-action{\n    appearance:none!important;\n    -webkit-appearance:none!important;\n    display:inline-flex!important;\n    align-items:center!important;\n    justify-content:center!important;\n    width:auto!important;\n    min-width:0!important;\n    height:28px!important;\n    min-height:28px!important;\n    padding:0 8px!important;\n    margin:0!important;\n    border:0!important;\n    border-radius:8px!important;\n    background:transparent!important;\n    color:#9da3ad!important;\n    font:500 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important;\n    white-space:nowrap!important;\n    box-shadow:none!important;\n    cursor:pointer!important;\n}\n.message-action:hover{background:#1b1e23!important;color:#e8eaee!important}\n.message-action:active{transform:none!important}\n.alpha .message-actions{padding-left:0!important}\n.alpha .message-body{width:100%!important}\n.user .message-actions{justify-content:flex-end!important}\n.user .message-action{color:#8f96a0!important}\n\n/* Clean ChatGPT-like bubbles on phones. */\n@media(max-width:600px){\n    #chat{padding:10px 14px 150px!important}\n    .message{padding:8px 0!important;margin:0!important;font-size:16px!important;line-height:1.58!important}\n    .user .message-body{max-width:86%!important;padding:10px 14px!important;background:#2f3033!important;border-radius:18px 18px 5px 18px!important}\n    .alpha .message-body{max-width:100%!important;padding:3px 0!important;background:transparent!important}\n    .message-actions{gap:2px!important;margin-top:3px!important}\n    .message-action{height:27px!important;min-height:27px!important;padding:0 7px!important;font-size:11px!important;border-radius:7px!important}\n}\n</style>\n</head>
 <body><main class="login-shell"><div class="brand"><div class="brand-mark">D</div><h1>Welcome to Daxx</h1><p>Your personal AI assistant</p></div><section class="card"><div class="tabs"><button id="loginTab" class="active" type="button" onclick="showMode('login')">Log in</button><button id="registerTab" type="button" onclick="showMode('register')">Create account</button></div><form onsubmit="submitAuth(event)"><div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com" required></div><div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Your password" required></div><div id="error" class="error"></div><button id="submit" class="primary" type="submit">Log in</button></form><div class="or"><span>OR</span></div><a class="google-btn" href="/auth/google"><span class="google-icon">G</span><span>Continue with Google</span></a><div class="note">Your chats, files and memories stay connected to your Daxx account.</div></section><div class="security">Secure sign-in • Daxx</div></main><script>
 let mode='login';
 function showMode(next){mode=next;document.getElementById('loginTab').classList.toggle('active',mode==='login');document.getElementById('registerTab').classList.toggle('active',mode==='register');document.getElementById('submit').textContent=mode==='login'?'Log in':'Create account';document.getElementById('password').autocomplete=mode==='login'?'current-password':'new-password';document.getElementById('password').placeholder=mode==='login'?'Your password':'At least 8 characters';document.getElementById('error').textContent='';}
@@ -2424,7 +2424,30 @@ def google_callback():
             "redirect_uri": _google_redirect_uri(),
             "grant_type": "authorization_code",
         }, timeout=20)
-        token_r.raise_for_status()
+
+        if not token_r.ok:
+            try:
+                token_error = token_r.json()
+                token_error_code = token_error.get("error", "unknown_error")
+                token_error_description = token_error.get("error_description", "")
+            except Exception:
+                token_error_code = f"HTTP {token_r.status_code}"
+                token_error_description = token_r.text[:300]
+
+            if token_r.status_code == 401 or token_error_code == "invalid_client":
+                raise ValueError(
+                    "Google rejected the OAuth Client ID/Client Secret. "
+                    "Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Render and make sure they belong to the same Google Web application client."
+                )
+            if token_error_code in ("invalid_grant", "redirect_uri_mismatch"):
+                raise ValueError(
+                    "Google rejected the OAuth callback. Make sure GOOGLE_REDIRECT_URI exactly matches the Authorized redirect URI in Google Cloud Console: "
+                    + _google_redirect_uri()
+                )
+            raise ValueError(
+                f"Google OAuth token exchange failed ({token_error_code}): {token_error_description or token_r.text[:300]}"
+            )
+
         access_token = token_r.json().get("access_token")
         if not access_token:
             raise ValueError("Google did not return an access token.")
@@ -3387,83 +3410,4 @@ def _pollinations_edit(raw: bytes, prompt: str):
                 data=data,
                 timeout=180,
             )
-            if not r.ok:
-                raise RuntimeError(f"Pollinations {model}: HTTP {r.status_code}: {r.text[:500]}")
-            payload = r.json()
-            item = (payload.get("data") or [{}])[0]
-            if item.get("b64_json"):
-                return base64.b64decode(item["b64_json"]), f"Pollinations/{model}"
-            if item.get("url"):
-                img = requests.get(item["url"], timeout=120)
-                img.raise_for_status()
-                return img.content, f"Pollinations/{model}"
-            raise RuntimeError(f"Pollinations {model}: response contained no image")
-        except Exception as exc:
-            last_error = exc
-    raise RuntimeError(str(last_error or "Pollinations image editing failed"))
-
-
-
-@app.route("/image_edit", methods=["POST"])
-@login_required_api
-def image_edit():
-    """Image editing through Pollinations' configured edit models.
-
-    Pollinations tries the models in POLLINATIONS_EDIT_MODELS order, so a
-    failed first model can fall through to the next configured model.
-    No paid or Qwen provider is selected automatically.
-    """
-    prompt = str(request.form.get("prompt", "")).strip()
-    files = [f for f in request.files.getlist("images") if f and f.filename]
-    if not prompt:
-        return jsonify({"error": "Tell Dax what you want changed in the image."}), 400
-    if not files:
-        return jsonify({"error": "Select an image first."}), 400
-    if len(files) > 1:
-        return jsonify({"error": "Free image editing currently supports one image at a time."}), 400
-
-    f = files[0]
-    if not (f.mimetype or "").startswith("image/"):
-        return jsonify({"error": "The selected file is not an image."}), 400
-    try:
-        raw = f.read()
-        if not raw:
-            return jsonify({"error": "The selected image is empty."}), 400
-        if len(raw) > 8 * 1024 * 1024:
-            return jsonify({"error": "For free editing, keep the image below 8 MB."}), 400
-        # Validate and normalize once before sending to providers.
-        source = Image.open(io.BytesIO(raw)).convert("RGB")
-        source.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        source.save(buf, format="JPEG", quality=94, optimize=True)
-        raw = buf.getvalue()
-
-        user_id = get_current_user_id()
-        cid = request.form.get("conversation_id")
-        try:
-            cid = int(cid) if cid else None
-        except Exception:
-            cid = None
-        if cid and not conversation_belongs_to_user(cid, user_id):
-            cid = None
-
-        if not POLLINATIONS_API_KEY:
-            return jsonify({
-                "error": "Image editing is not configured. Add POLLINATIONS_API_KEY in Render Environment Variables."
-            }), 503
-
-        edited_bytes, provider_name = _pollinations_edit(raw, prompt)
-        final_data_url, image_id, provider_name = _save_edited_image(
-            user_id, cid, edited_bytes, provider_name
-        )
-        return jsonify({
-            "image_url": final_data_url,
-            "image_id": image_id,
-            "provider": provider_name,
-        })
-
-    except Exception as exc:
-        app.logger.exception("Image edit request failed: %s", exc)
-        return jsonify({
-            "error": f"Image processing failed: {exc}"
-        }), 500
+            
