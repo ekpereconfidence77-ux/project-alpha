@@ -3468,5 +3468,5 @@ def image_edit():
         except Exception as exc:
             app.logger.warning("Pollinations image editor failed: %s", exc)
             return jsonify({
-                "error": "Image edi
+                "error": f"Image ed
 Preview truncated for large file
