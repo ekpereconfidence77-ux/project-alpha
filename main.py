@@ -3410,7 +3410,5 @@ def _pollinations_edit(raw: bytes, prompt: str):
                 data=data,
                 timeout=180,
             )
-            if not r.ok:
-    raise RuntimeError(
-        f"Pollinations {model}: HTTP {r.status_code}: {r.text[:500]}"
-    )
+                        if not r.ok:
+                raise RuntimeError(f"Pollinations {model}: HTTP {r.status_code}: {r.text[:500]}")
